@@ -42,6 +42,10 @@ function openRoutes(peerId: string): void {
   window.dispatchEvent(new CustomEvent("birdbox:routes-open", { detail: { peerId } }));
 }
 
+function openProtocolDetails(peerId: string): void {
+  window.dispatchEvent(new CustomEvent("birdbox:protocol-details-open", { detail: { peerId } }));
+}
+
 function openRoutePath(): void {
   window.dispatchEvent(new CustomEvent("birdbox:route-path-open"));
 }
@@ -77,7 +81,18 @@ function eventTime(event: ChangeEvent): string {
           <td>{{ peer.name }}</td>
           <td>{{ peer.address }}</td>
           <td>{{ peer.session?.protocolName ?? "-" }}</td>
-          <td><span class="table-state" :class="peer.protocol?.established ? 'up' : peer.session ? 'down' : ''">{{ protocolPresentation(dashboard, peer).label }}</span></td>
+          <td>
+            <button
+              v-if="peer.session"
+              class="table-state-button"
+              type="button"
+              :aria-label="`查看 ${peer.name} 的协议状态详情`"
+              @click="openProtocolDetails(peer.id)"
+            >
+              <span class="table-state" :class="peer.protocol?.established ? 'up' : 'down'">{{ protocolPresentation(dashboard, peer).label }}</span>
+            </button>
+            <span v-else class="table-state">未配置</span>
+          </td>
           <td>
             <button
               v-if="peer.session"

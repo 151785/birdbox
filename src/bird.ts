@@ -14,6 +14,7 @@ export {
   executeNodeRpc,
   executeNodeCommand,
   inspectNode,
+  inspectProtocolDetails,
   inspectOspfRuntime,
   inspectProtocolRoutes,
   inspectRoutePath,

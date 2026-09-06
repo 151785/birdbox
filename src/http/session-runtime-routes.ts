@@ -1,9 +1,9 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
-import type { ChangeEvent, DashboardRuntimeResponse, RouteDetailsResponse, RoutePathResponse } from "../../packages/contracts/src/api.js";
+import type { ChangeEvent, DashboardRuntimeResponse, ProtocolDetailsResponse, RouteDetailsResponse, RoutePathResponse } from "../../packages/contracts/src/api.js";
 import type { Inventory, ManagedNode } from "../../packages/contracts/src/inventory.js";
 import type { AuthStore } from "../auth.js";
-import { executeNodeCommand, executeNodeRpc, inspectNode, inspectOspfRuntime, inspectProtocolRoutes, inspectRoutePath, setProtocolState } from "../bird.js";
+import { executeNodeCommand, executeNodeRpc, inspectNode, inspectOspfRuntime, inspectProtocolDetails, inspectProtocolRoutes, inspectRoutePath, setProtocolState } from "../bird.js";
 import { ospfDomainNodeIds, ospfProtocolName } from "../ospf.js";
 import { configForNode } from "../inventory-domain.js";
 import type { InventoryStore } from "../store.js";
@@ -158,6 +158,22 @@ export const sessionRuntimeRoutes: FastifyPluginAsync<SessionRuntimeRoutesOption
       routes: result.routes,
       truncated: result.truncated,
       limit: result.limit,
+    };
+    return jsonReply(reply, 200, payload);
+  });
+
+  app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId/protocol", async (request, reply) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.params.sessionId)) throw routeError(404, "接口不存在");
+    const state = await options.store.read();
+    const session = state.sessions.find((item) => item.id === request.params.sessionId);
+    if (!session) throw routeError(404, "会话不存在");
+    const node = findNode(state, session.nodeId);
+    const result = await inspectProtocolDetails(node, session.protocolName);
+    const payload: ProtocolDetailsResponse = {
+      session: { id: session.id, protocolName: session.protocolName },
+      ok: result.ok,
+      output: result.output,
+      error: result.error,
     };
     return jsonReply(reply, 200, payload);
   });

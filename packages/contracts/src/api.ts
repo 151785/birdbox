@@ -298,6 +298,13 @@ export interface RouteDetailsResponse {
   limit: number;
 }
 
+export interface ProtocolDetailsResponse {
+  session: { id: string; protocolName: string };
+  ok: boolean;
+  output: string;
+  error: string | null;
+}
+
 export interface RoutePathHop {
   address: string | null;
   interface: string | null;

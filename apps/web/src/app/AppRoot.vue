@@ -8,6 +8,7 @@ import AuthView from "../auth/AuthView.vue";
 import DashboardOverview from "../dashboard/DashboardOverview.vue";
 import DashboardRuntime from "../dashboard/DashboardRuntime.vue";
 import RouteDetailsDialog from "../dashboard/RouteDetailsDialog.vue";
+import ProtocolDetailsDialog from "../dashboard/ProtocolDetailsDialog.vue";
 import RoutePathDialog from "../dashboard/RoutePathDialog.vue";
 import SessionControlButton from "../dashboard/SessionControlButton.vue";
 import { clearDashboard, loadDashboard, refreshDashboardRuntime, useDashboardStore } from "../dashboard/dashboard-store";
@@ -405,6 +406,7 @@ onBeforeUnmount(() => {
   <div id="operationStatus" class="visually-hidden" role="status" aria-live="polite">{{ mutationPresentation?.title ?? "" }}</div>
   <div id="toastRegion" class="toast-region" aria-live="assertive"><div v-for="item in toasts" :key="item.id" class="toast" :class="item.type">{{ item.message }}</div></div>
   <div id="routeDetailsApp"><RouteDetailsDialog /></div>
+  <div id="protocolDetailsApp"><ProtocolDetailsDialog /></div>
   <div id="routePathApp"><RoutePathDialog /></div>
 
   <dialog id="mutationWaitDialog" ref="mutationDialog" class="mutation-wait-dialog" aria-labelledby="mutationWaitTitle" aria-describedby="mutationWaitDetail" @cancel.prevent>

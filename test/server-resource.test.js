@@ -50,6 +50,10 @@ test("resource PUT applies to existing sessions and rejects invalid edits atomic
   const fakeCommand = `#!/bin/sh
 printf '%s %s\n' "$0" "$*" >> "$BIRDBOX_FAKE_LOG"
 case "$*" in
+  *"show protocols all test_bgp"*)
+    printf '%s\n' 'BIRD 2.19.1 ready.' 'test_bgp BGP' '  BGP state: Established' '  Neighbor address: 192.0.2.2' '  Neighbor AS: 65002' '  Channel ipv4' '    State: UP' '    Routes: 1 imported, 1 exported, 1 preferred'
+    exit 0
+    ;;
   *"show route table master4 for 203.0.113.5 all"*)
     printf '%s\n' 'BIRD 2.19.1 ready.' 'Table master4:' \
       '203.0.113.0/24    unicast [test_bgp 10:00:00.000] * (100) [AS65002i]' \
@@ -336,6 +340,12 @@ exit 0
   assert.deepEqual(ipv6PathLookup.body.routes[0].nextHops, [{ address: "2001:db8::2", interface: "eth1" }]);
   const invalidPathTarget = await authenticatedRequest("/api/nodes/local/route-path?target=not-an-ip");
   assert.equal(invalidPathTarget.status, 400);
+  const protocolDetails = await authenticatedRequest("/api/sessions/session_test/protocol");
+  assert.equal(protocolDetails.status, 200);
+  assert.equal(protocolDetails.body.session.protocolName, "test_bgp");
+  assert.equal(protocolDetails.body.ok, true);
+  assert.match(protocolDetails.body.output, /BGP state: Established/);
+  assert.match(await fs.readFile(fakeLog, "utf8"), /show protocols all test_bgp/);
 
   const disabledSession = await authenticatedRequest("/api/sessions/apply", {
     method: "POST",

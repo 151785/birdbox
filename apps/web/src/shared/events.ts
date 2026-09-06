@@ -42,6 +42,7 @@ declare global {
     "birdbox:dashboard-loading": CustomEvent<{ loading: boolean }>;
     "birdbox:dashboard-selection": CustomEvent<DashboardSelectionEventDetail>;
     "birdbox:dashboard-updated": CustomEvent<DashboardUpdatedEventDetail>;
+    "birdbox:protocol-details-open": CustomEvent<{ peerId: string }>;
     "birdbox:routes-open": CustomEvent<{ peerId: string }>;
     "birdbox:resource-edit": CustomEvent<{ kind: ResourceEditKind; id: string }>;
     "birdbox:resource-create": CustomEvent<{ kind: ResourceEditKind }>;

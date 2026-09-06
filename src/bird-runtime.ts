@@ -78,6 +78,12 @@ export interface RoutePathResult {
   limit: number;
 }
 
+export interface ProtocolDetailsResult {
+  ok: boolean;
+  output: string;
+  error: string | null;
+}
+
 // OpenWrt BusyBox images may omit the stat applet. Keep ownership discovery
 // numeric so resource deployment can still use chgrp with the socket GID.
 const REMOTE_FILE_GID_HELPER = `
@@ -174,6 +180,33 @@ printf '%s\\n---BIRDBOX---\\n%s\\n' "$version" "$protocols"
     protocols: parseProtocolStatuses(raw),
     error: result.ok ? null : (result.stderr || "节点不可达"),
     raw: raw.trim(),
+  };
+}
+
+/** Read the verbose BIRD details for one configured protocol. */
+export async function inspectProtocolDetails(nodeInput: unknown, protocolNameInput: unknown): Promise<ProtocolDetailsResult> {
+  const node = normalizeNode(nodeInput);
+  const protocolName = normalizeId(protocolNameInput, "BGP 协议名称");
+  if (node.transport === "agent") {
+    const result = await executeNodeRpc(node, "bird.protocol", {
+      socketPath: node.socketPath,
+      protocolName,
+    }, 20_000);
+    return {
+      ok: result.ok,
+      output: result.stdout.trim(),
+      error: result.ok ? null : (result.stderr || result.stdout || "无法读取 BIRD 协议详情"),
+    };
+  }
+  const result = await executeNodeCommand(
+    node,
+    `birdc -s '${node.socketPath}' -v 'show protocols all ${protocolName}' 2>&1`,
+    { timeout: 15_000, maxBuffer: 512 * 1024 },
+  );
+  return {
+    ok: result.ok,
+    output: result.stdout.trim(),
+    error: result.ok ? null : (result.stderr || result.stdout || "无法读取 BIRD 协议详情"),
   };
 }
 

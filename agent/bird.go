@@ -714,7 +714,16 @@ func birdTaskStructured(parent context.Context, method string, params map[string
 		}
 		return r
 	case "bird.protocol":
-		out := runBirdc(parent, socket, "show protocols all")
+		protocolName, _ := params["protocolName"].(string)
+		if protocolName != "" && !safeBirdName.MatchString(protocolName) {
+			r.Stderr, r.Code = "invalid protocol name", "INVALID_PROTOCOL"
+			return r
+		}
+		command := "show protocols all"
+		if protocolName != "" {
+			command += " " + protocolName
+		}
+		out := runBirdcVerbose(parent, socket, command)
 		r.Stdout, r.Stderr, r.OK, r.Code = out.stdout, out.stderr, out.ok, out.code
 		return r
 	case "bird.routes":
