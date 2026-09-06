@@ -51,6 +51,8 @@ MYSQL_PASSWORD=请替换为随机密码
 MYSQL_ROOT_PASSWORD=请替换为另一组随机密码
 BIRDBOX_BIND_ADDRESS=127.0.0.1
 BIRDBOX_PORT=3000
+# Agent 节点回连时必须填写节点实际可达的 URL，不能填写 0.0.0.0
+BIRDBOX_PUBLIC_URL=http://127.0.0.1:3000
 BIRDBOX_SECURE_COOKIE=true
 ```
 
@@ -85,6 +87,52 @@ docker compose up -d --force-recreate birdbox
 
 同时在防火墙中只允许可信网段访问 `BIRDBOX_PORT`。未初始化的服务不能直接暴露到公网。
 
+### 使用 Agent 节点
+
+Agent 是节点主动连接模式，节点不需要暴露入站端口，但必须能够访问 Birdbox
+主控的 HTTP/HTTPS 端口。Docker Compose 的端口格式是：
+
+```text
+宿主机地址:宿主机端口:容器端口
+```
+
+容器内部固定监听 `3000`，因此远程 Agent 部署可以使用下面的配置（示例主控地址为
+`172.20.177.34`）：
+
+```dotenv
+BIRDBOX_BIND_ADDRESS=0.0.0.0
+BIRDBOX_PORT=3500
+BIRDBOX_PUBLIC_URL=http://172.20.177.34:3500
+BIRDBOX_SECURE_COOKIE=false
+```
+
+对应的 Compose 映射为 `0.0.0.0:3500:3000`（容器端口仍固定为 `3000`）：
+
+```yaml
+services:
+  birdbox:
+    ports:
+      - "0.0.0.0:3500:3000"
+```
+
+使用仓库自带 Compose 文件时，无需手工改 YAML，`.env` 中的
+`BIRDBOX_BIND_ADDRESS` 和 `BIRDBOX_PORT` 会生成同样的映射。修改 `.env` 后重建主控容器：
+
+```bash
+docker compose up -d --force-recreate birdbox
+curl -fsS http://172.20.177.34:3500/api/health
+```
+
+在浏览器中为 Agent 节点生成准备脚本时，脚本会使用
+`BIRDBOX_PUBLIC_URL` 下载对应架构的 Agent，并连接以下主控接口：
+`/api/agent/register`、`/api/agent/tasks/poll` 和
+`/api/agent/tasks/:taskId/result`。防火墙和反向代理必须放行该 URL；Agent 不需要
+单独的 Docker 服务或入站端口。若通过 HTTPS 反向代理发布，`BIRDBOX_PUBLIC_URL`
+应填写完整的 `https://` 地址，并将 `BIRDBOX_SECURE_COOKIE` 设为 `true`。
+
+Agent 的构建、镜像发布、架构映射和下载校验流程见
+[Agent 构建与发布](docs/docker-release.md#agent-构建与发布)。
+
 ## 接入第一个节点
 
 ### 1. 准备目标节点
@@ -98,7 +146,9 @@ docker compose up -d --force-recreate birdbox
 
 ### 2. 生成准备脚本
 
-登录 Birdbox 后进入“资源管理”中的“受管节点”，点击“添加节点”，填写 SSH 连接地址、SSH 端口、SSH 用户、Router ID 和配置路径，然后点击“生成准备脚本”。已有节点可直接把 SSH 连接地址或端口改为公网 SSH 服务；该修改不会改变既有会话地址或节点 IGP 地址。
+登录 Birdbox 后进入“资源管理”中的“受管节点”，点击“添加节点”，填写节点名称、Router ID、IGP 地址和配置路径，然后点击“生成准备脚本”。新节点统一使用 Agent 主动连接，不再填写 SSH 连接地址、SSH 端口或 SSH 用户。
+
+已有旧 SSH 节点仍可编辑 SSH 地址和端口（不会改变既有会话地址或节点 IGP 地址），并在节点编辑页面生成 Agent 升级脚本，待 Agent 注册后切换管理方式。
 
 常规 Linux 使用默认的 Linux 预设。OpenWrt/iStoreOS 应选择 OpenWrt 预设，默认路径为：
 
@@ -161,7 +211,9 @@ RPKI 资源支持本地 ROA 文件和 RPKI-RTR 缓存，可应用于所有节点
 
 ### 源地址出口映射
 
-源地址出口映射将一批 IPv4 源 CIDR 按出口地址分组，并下发到指定节点。Birdbox 为每个出口组生成独立 BIRD table、recursive default 和 Kernel Protocol；出口地址通过 `master4` 动态解析。每个出口组的 Linux kernel table 默认自动分配，也可以手工指定未占用的 table ID。保存后，界面会按节点提供 Linux root 脚本、完整 systemd 安装/更新脚本或 OpenWrt LuCI 规则清单。Birdbox 不会自动执行 `ip rule`，删除或停用映射集后也需要执行对应的规则清理计划。
+源地址出口映射将一批 IPv4 源 CIDR 按出口地址分组，并下发到指定节点。Birdbox 为每个出口组生成独立 BIRD table、recursive default 和 Kernel Protocol；出口地址通过 `master4` 动态解析。每个出口组的 Linux kernel table 默认自动分配，也可以手工指定未占用的 table ID。Agent 节点保存后会自动维护 `ip rule`，并为出口地址添加查询 `main` 表的目的地址例外，避免递归下一跳被源策略表再次接管。旧 SSH 节点仍提供 root 脚本、完整 systemd 安装/更新脚本或 OpenWrt LuCI 规则清单，并提示先升级为 Agent。
+
+新建或修改映射时，出口地址不能落在任意源 CIDR 内；否则会提示拆分源 CIDR 或更换出口地址。为兼容升级，历史库存中的此类配置仍可读取，旧 SSH 节点升级为 Agent 时会先接管现有规则并补齐目的地址例外。
 
 ## 数据、备份和升级
 

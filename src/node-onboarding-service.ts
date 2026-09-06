@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { ChangeEvent, NodeOnboardingRpkiRequirement, NodeRuntime } from "../packages/contracts/src/api.js";
 import type { Inventory, ManagedNode } from "../packages/contracts/src/inventory.js";
+import { resourceAppliesToNode } from "../packages/contracts/src/resource-scope.js";
 import {
   ACTIVE_BIRD_INCLUDE_AWK,
   applyStagedConfig,
@@ -9,6 +10,8 @@ import {
   inspectNode,
   normalizeNode,
   renderBirdConfig,
+  sourcePolicyManagedRules,
+  executeNodeRpc,
   rollbackNode,
   stageAndValidate,
   validateInventory,
@@ -66,7 +69,7 @@ function normalizeSshNode(inputValue: unknown): ManagedNode {
 
 function normalizeAgentNode(inputValue: unknown, id = "node_onboarding"): ManagedAgentNode {
   const input = record(inputValue, "节点参数不能为空");
-  if (input.transport !== "agent") fail(400, "节点不是 Agent 管理方式");
+  if (input.transport !== undefined && input.transport !== "agent") fail(400, "节点不是 Agent 管理方式");
   const node = normalizeNode({
     ...input,
     id,
@@ -82,11 +85,13 @@ function normalizeAgentNode(inputValue: unknown, id = "node_onboarding"): Manage
 
 function normalizeOnboardingNode(inputValue: unknown, id = "node_onboarding"): ManagedSshNode | ManagedAgentNode {
   const input = record(inputValue, "节点参数不能为空");
-  if (input.transport === "agent") return normalizeAgentNode(input, id);
+  if (input.transport === "agent" || input.transport === undefined) return normalizeAgentNode(input, id);
   const node = normalizeSshNode({
     ...input,
     id,
-    transport: input.transport ?? "ssh",
+    // New onboarding defaults to Agent. Explicit SSH remains accepted only so
+    // existing automation can finish migrating legacy nodes.
+    transport: input.transport ?? "agent",
     deploymentMode: input.deploymentMode ?? "include",
     sshIdentity: input.sshIdentity ?? "managed",
   });
@@ -581,7 +586,9 @@ function agentSetupScript(node: ManagedAgentNode, controllerUrl: string, token: 
     "CHECKSUM_TMP=$TMP.sha256",
     `CHECKSUM_URL=${shellSingleQuote(`${baseUrl}/api/agent/releases/latest/checksum`)}?arch=$AGENT_ARCH`,
     `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 "$CHECKSUM_URL" -o "$CHECKSUM_TMP"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$CHECKSUM_TMP" "$CHECKSUM_URL"; else echo '缺少 curl 或 wget，无法验证 Agent 下载' >&2; exit 1; fi`,
-    `EXPECTED=$(tr -d '[:space:]' < "$CHECKSUM_TMP")`,
+    // BusyBox tr on OpenWrt does not reliably implement POSIX character
+    // classes; sed keeps checksum parsing portable across ash environments.
+    `EXPECTED=$(sed 's/[[:space:]]//g' < "$CHECKSUM_TMP")`,
     `case "$EXPECTED" in [0-9a-fA-F]*) ;; *) echo 'Agent 校验摘要格式错误' >&2; exit 1;; esac`,
     `if command -v sha256sum >/dev/null 2>&1; then ACTUAL=$(sha256sum "$TMP" | awk '{print $1}'); elif command -v openssl >/dev/null 2>&1; then ACTUAL=$(openssl dgst -sha256 "$TMP" | awk '{print $NF}'); else echo '缺少 sha256sum 或 openssl，无法验证 Agent 下载' >&2; exit 1; fi`,
     `test "$(printf '%s' "$EXPECTED" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$ACTUAL" | tr '[:upper:]' '[:lower:]')" || { echo 'Agent 下载校验失败' >&2; exit 1; }`,
@@ -644,7 +651,7 @@ export class NodeOnboardingService {
   }
 
   async createSetupScript(body: Record<string, unknown>) {
-    const setupId = body.transport === "agent"
+    const setupId = (body.transport === "agent" || body.transport === undefined)
       ? (typeof body.id === "string" && body.id ? body.id : this.#options.makeId("node"))
       : undefined;
     const node = normalizeOnboardingNode(body, setupId ?? "node_onboarding");
@@ -686,12 +693,26 @@ export class NodeOnboardingService {
     if (previous.transport !== "ssh") fail(409, "只有 SSH 节点可以切换到 Agent");
     if (!this.#options.agentBroker.status(nodeId)?.connected) fail(409, "Agent 尚未注册，不能切换管理方式");
     const candidate = normalizeAgentNode({ ...previous, transport: "agent", sshHost: null, sshPort: null, sshUser: null, sshIdentity: "default", deploymentMode: "include" }, nodeId);
+    const sourceRules = sourcePolicyManagedRules(current.sourcePolicies
+      .filter((resource) => resource.enabled && resourceAppliesToNode(resource, nodeId)))
+      .map(({ priority, source, destination, table, kind }) => ({ priority, source, destination, table, kind }));
     const { state, deployment } = await this.#options.deploymentService.mutateAndApply((draft) => {
       const index = draft.nodes.findIndex((item) => item.id === nodeId);
       if (index < 0) fail(404, "受管节点不存在");
       draft.nodes[index] = candidate;
       return candidate;
-    }, () => [nodeId]);
+    }, () => [nodeId], {
+      apply: async (node) => {
+        if (!sourceRules.length) return;
+        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: sourceRules, rules: sourceRules }, 60_000);
+        if (!result.ok) fail(502, result.stderr || result.stdout || `${node.name} 的旧系统规则接管失败`);
+      },
+      rollback: async (node) => {
+        if (!sourceRules.length) return;
+        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: sourceRules, rules: [] }, 60_000);
+        if (!result.ok) fail(502, result.stderr || result.stdout || `${node.name} 的系统规则接管回滚失败`);
+      },
+    });
     this.#options.addEvent("success", `受管节点 ${candidate.name} 已切换为 Agent`, nodeId);
     return { status: 200, payload: { node: candidate, inventory: state, deployment, events: this.#options.getEvents() } };
   }

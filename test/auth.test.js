@@ -134,6 +134,7 @@ test("supports password setup and manages multiple active admin sessions", async
     headers: { cookie: firstCookie },
     body: JSON.stringify({
       name: "Test SSH node",
+      transport: "ssh",
       sshHost: "router.example",
       sshUser: "birdbox",
       routerId: "192.0.2.1",
@@ -181,6 +182,7 @@ test("supports password setup and manages multiple active admin sessions", async
     headers: { cookie: firstCookie },
     body: JSON.stringify({
       name: "Root SSH node",
+      transport: "ssh",
       sshHost: "router.example",
       sshUser: "root",
       routerId: "192.0.2.2",

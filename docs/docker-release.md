@@ -92,7 +92,8 @@ docker buildx create --name birdbox-builder --driver docker-container --use
 docker buildx inspect --bootstrap
 ```
 
-然后执行一次构建并直接推送 manifest list：
+然后执行一次构建并直接推送 manifest list。每个控制器镜像同时携带全部 Agent
+架构的二进制，因此安装脚本不依赖构建主机架构：
 
 ```bash
 VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version")"
@@ -118,7 +119,7 @@ docker buildx build \
 docker buildx imagetools inspect "pmman/birdbox:${VERSION}"
 ```
 
-输出应包含 `linux/amd64` 和 `linux/arm64`。记录 digest，生产环境推荐将
+输出应包含 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。记录 digest，生产环境推荐将
 `.env` 中的 `BIRDBOX_IMAGE_TAG` 设置为例如
 `0.02a@sha256:...`，从而避免 tag 被意外替换。
 
@@ -143,6 +144,95 @@ docker buildx imagetools create \
 ```
 
 不要让 `latest` 成为生产 Compose 的唯一依赖；生产部署应记录具体版本或 digest。
+
+## Agent 构建与发布
+
+Agent 使用仓库根目录 `Dockerfile` 的 `agent-build` 阶段交叉编译，最终复制到镜像的
+`/usr/local/lib/birdbox-agent` 目录。当前发布的架构和下载参数如下：
+
+| 目标平台 | `arch` 参数 | Go 架构 | 镜像内文件 |
+| --- | --- | --- | --- |
+| x86_64 | `amd64` | `GOARCH=amd64` | `birdbox-agent-amd64` |
+| AArch64 | `arm64` | `GOARCH=arm64` | `birdbox-agent-arm64` |
+| ARMv7 | `arm` | `GOARCH=arm GOARM=7` | `birdbox-agent-arm` |
+| MIPS | `mips` | `GOARCH=mips` | `birdbox-agent-mips` |
+| MIPS little-endian | `mipsle` | `GOARCH=mipsle` | `birdbox-agent-mipsle` |
+| MIPS64 | `mips64` | `GOARCH=mips64` | `birdbox-agent-mips64` |
+| RISC-V 64 | `riscv64` | `GOARCH=riscv64` | `birdbox-agent-riscv64` |
+
+### 构建参数
+
+正式构建必须显式传入以下参数：
+
+- `BIRDBOX_VERSION`：写入 Agent `--version` 和 OCI image label，通常使用
+  `package.json` 的版本。
+- `VCS_REF`：Git commit 短 SHA，写入 OCI image label，便于追溯源码。
+- `BUILD_DATE`：UTC ISO 8601 时间，写入 OCI image label。
+
+示例：
+
+```bash
+VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version")"
+VCS_REF="$(git rev-parse --short=12 HEAD)"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+docker buildx build \
+  --builder birdbox-builder \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg BIRDBOX_VERSION="$VERSION" \
+  --build-arg VCS_REF="$VCS_REF" \
+  --build-arg BUILD_DATE="$BUILD_DATE" \
+  --tag "pmman/birdbox:${VERSION}" \
+  --push .
+```
+
+`agent-build` 本身会生成上表中的七种 Linux Agent；`--platform` 控制的是最终
+Birdbox 控制器镜像的运行平台，不会减少 Agent 二进制的数量。构建后应检查镜像内
+文件：
+
+```bash
+docker run --rm --entrypoint sh "pmman/birdbox:${VERSION}" -c \
+  'ls -l /usr/local/lib/birdbox-agent/birdbox-agent-*'
+```
+
+### 下载、校验与安装脚本
+
+主控提供两个无需登录的引导接口，供尚未注册的节点下载 Agent：
+
+```text
+GET /api/agent/releases/latest/download?arch=<arch>
+GET /api/agent/releases/latest/checksum?arch=<arch>
+```
+
+例如：
+
+```bash
+curl -fsS -o birdbox-agent \
+  "https://birdbox.example.com/api/agent/releases/latest/download?arch=arm64"
+curl -fsS "https://birdbox.example.com/api/agent/releases/latest/checksum?arch=arm64"
+sha256sum birdbox-agent
+```
+
+Agent 节点准备脚本会根据 `uname -m` 自动映射架构、下载二进制、校验 SHA-256，
+然后安装 systemd unit 或 OpenWrt procd 服务。发布新镜像后，必须在主控执行
+`docker compose pull birdbox && docker compose up -d --no-deps birdbox`，使下载
+接口切换到新镜像中的 Agent；已经运行的 Agent 不会被自动替换，需从节点管理页面
+发起自升级或重新执行升级脚本。
+
+发布前至少验证每种目标架构的下载和摘要接口返回 200，并确认摘要与下载文件一致：
+
+```bash
+for arch in amd64 arm64 arm mips mipsle mips64 riscv64; do
+  curl -fsS -o "/tmp/birdbox-agent-$arch" \
+    "https://birdbox.example.com/api/agent/releases/latest/download?arch=$arch"
+  curl -fsS "https://birdbox.example.com/api/agent/releases/latest/checksum?arch=$arch" \
+    | tr -d '[:space:]' | cmp - <(sha256sum "/tmp/birdbox-agent-$arch" | awk '{print $1}')
+done
+```
+
+`latest` 下载接口始终对应当前运行中的控制器镜像，而不是 Docker Hub 上尚未部署的
+镜像。生产环境应先完成镜像升级，再为新 Agent 节点生成准备脚本，并保留旧版本镜像
+以便回滚。
 
 ## 发布后的检查与回滚
 

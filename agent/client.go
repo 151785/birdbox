@@ -94,7 +94,7 @@ func (c *Client) Register(ctx context.Context, version string) error {
 	var out map[string]any
 	return c.request(ctx, http.MethodPost, "/api/agent/register", registration{
 		NodeID: c.cfg.NodeID, Token: c.cfg.Token, AgentVersion: version, ProtocolVersion: 1,
-		Capabilities: []string{"system.info", "system.interfaces", "legacy.exec", "bird.inspect", "bird.validate", "bird.stage", "bird.apply", "bird.rollback", "bird.protocol", "bird.routes", "bird.protocol_state", "bird.ospf", "bird.access", "agent.self_upgrade"},
+		Capabilities: []string{"system.info", "system.interfaces", "network.ip_rules", "legacy.exec", "bird.inspect", "bird.validate", "bird.stage", "bird.apply", "bird.rollback", "bird.protocol", "bird.routes", "bird.protocol_state", "bird.ospf", "bird.access", "agent.self_upgrade"},
 		Platform:     runtime.GOOS, Architecture: runtime.GOARCH, Hostname: hostname(),
 	}, &out)
 }
@@ -124,6 +124,9 @@ func executeTask(parent context.Context, t task) result {
 		out := runCommand(parent, "ip", []string{"-o", "link", "show"}, 15*time.Second, 512*1024)
 		r.Stdout, r.Stderr, r.OK, r.Code = interfaceNames(out.stdout), out.stderr, out.ok, out.code
 		return r
+	}
+	if t.Method == "network.ip_rules" {
+		return networkIPRulesTask(parent, t.Params, r)
 	}
 	if t.Method == "agent.self_upgrade" {
 		return upgradeTask(t, r)

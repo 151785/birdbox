@@ -168,7 +168,11 @@ export interface ResourceMutationResponse<Resource> {
 
 export interface SourcePolicyRuleInstruction {
   priority: number;
-  source: string;
+  /** Source selector for a policy rule. Exactly one of source/destination is set. */
+  source: string | null;
+  /** Destination selector used to keep an egress gateway on the underlay table. */
+  destination: string | null;
+  kind: "source" | "gateway";
   table: number;
   egressAddress: string;
   groupId: string;
@@ -184,11 +188,20 @@ export interface SourcePolicyManualPlan {
   birdConfig: string;
   rules: SourcePolicyRuleInstruction[];
   removeRules: SourcePolicyRuleInstruction[];
+  gatewayRules: SourcePolicyRuleInstruction[];
+  removeGatewayRules: SourcePolicyRuleInstruction[];
+  /** Complete node-level rule set used by generated scripts and Agent reconcile. */
+  managedRules: SourcePolicyRuleInstruction[];
+  removeManagedRules: SourcePolicyRuleInstruction[];
   applyScript: string | null;
   cleanupScript: string | null;
   systemdUnit: string | null;
   systemdInstallScript: string | null;
   instructions: string[];
+  /** Whether the controller applies kernel rules automatically. */
+  management: "agent" | "local" | "manual";
+  upgradeRequired: boolean;
+  warning: string | null;
 }
 
 export interface SourcePolicyMutationResponse extends ResourceMutationResponse<SourcePolicyEgress> {

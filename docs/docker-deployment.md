@@ -45,6 +45,30 @@ BIRDBOX_PUBLIC_URL=https://birdbox.example.com
 `BIRDBOX_IMAGE_TAG` 固定为具体版本 tag 或镜像 digest，使升级和回滚结果可重复。
 如果使用 Agent 主动连接节点，`BIRDBOX_PUBLIC_URL` 必须填写节点实际可达的主控 URL；不要填写监听地址 `0.0.0.0`。
 
+### Agent 的端口映射
+
+Agent 只向主控发起 HTTP/HTTPS 请求，不监听主控入站端口，也不需要在 Compose 中
+增加第二个 Agent 服务。Compose 的唯一端口映射是主控的宿主机端口到容器 `3000`：
+
+```yaml
+ports:
+  - "${BIRDBOX_BIND_ADDRESS:-127.0.0.1}:${BIRDBOX_PORT:-3000}:3000"
+```
+
+当 Agent 位于其它机器时，主控端口必须绑定到 Agent 可达的地址。例如主控局域网地址
+为 `172.20.177.34`，使用宿主机 `3500` 端口：
+
+```dotenv
+BIRDBOX_BIND_ADDRESS=0.0.0.0
+BIRDBOX_PORT=3500
+BIRDBOX_PUBLIC_URL=http://172.20.177.34:3500
+```
+
+此时 Agent 连接 `http://172.20.177.34:3500`，容器内仍然访问 `3000`。防火墙只需
+放行 `3500/tcp`（或反向代理的 HTTPS 端口）；不需要开放任何 Agent 入站端口。
+使用反向代理时可将绑定地址保留为 `127.0.0.1`，但 `BIRDBOX_PUBLIC_URL` 必须是
+节点可以访问的完整 HTTPS URL，并且代理要转发 `/api/agent/*` 和文件下载接口。
+
 启动并检查服务：
 
 ```bash

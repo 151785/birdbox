@@ -387,6 +387,21 @@ exit 0
   assert.equal(createdSourcePolicy.body.manualPlans.length, 1);
   assert.match(createdSourcePolicy.body.manualPlans[0].applyScript, /ip -4 rule add priority/);
   const sourcePolicyId = createdSourcePolicy.body.resource.id;
+
+  const conflictingGatewayPolicy = await authenticatedRequest("/api/source-policies", {
+    method: "POST",
+    body: JSON.stringify({
+      nodeIds: ["local"],
+      label: "Gateway inside source range",
+      groups: [{ egressAddress: "198.51.100.1", kernelTable: 50002, sources: ["198.51.100.0/24"] }],
+      copyInternalRoutes: false,
+      enabled: true,
+    }),
+  });
+  assert.equal(conflictingGatewayPolicy.status, 400);
+  assert.match(conflictingGatewayPolicy.body.error, /出口地址 .*落在源 CIDR/);
+  assert.equal((await authenticatedRequest("/api/dashboard")).body.inventory.sourcePolicies.length, 1);
+
   const sourcePolicyPreview = await authenticatedRequest("/api/source-policies/preview", {
     method: "POST",
     body: JSON.stringify({

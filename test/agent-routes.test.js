@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import Fastify from "fastify";
 
 import { AgentBroker } from "../src/agent-broker.js";
@@ -23,4 +26,21 @@ test("Agent HTTP polling API authenticates and returns queued tasks", async () =
   assert.equal(result.statusCode, 200);
   assert.equal((await pending).ok, true);
   await app.close();
+});
+
+test("Agent release download accepts the mipsle spelling used by setup scripts", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "birdbox-agent-route-"));
+  try {
+    await writeFile(path.join(directory, "birdbox-agent-mipsle"), "agent-mipsle");
+    const app = Fastify();
+    await app.register(agentRoutes, { broker: new AgentBroker({ database: new MemoryDatabase() }), binaryPath: directory });
+    for (const arch of ["mipsle", "mipsel"]) {
+      const response = await app.inject({ method: "GET", url: `/api/agent/releases/latest/download?arch=${arch}` });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.body, "agent-mipsle");
+    }
+    await app.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

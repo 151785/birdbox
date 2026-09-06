@@ -1,4 +1,4 @@
-import type { ChangeEvent, IbgpPreviewSide, SourcePolicyManualPlan } from "../packages/contracts/src/api.js";
+import type { ChangeEvent, IbgpPreviewSide, SourcePolicyManualPlan, SourcePolicyRuleInstruction } from "../packages/contracts/src/api.js";
 import type {
   BgpSession,
   Inventory,
@@ -18,9 +18,13 @@ import {
   normalizeStaticProtocol,
   prepareSourcePolicyEgress,
   renderSourcePolicyEgress,
+  sourcePolicyGatewayConflicts,
+  sourcePolicyManagedRules,
+  sourcePolicyRules,
   sourcePolicyManualPlan,
   stageAndValidate,
   validateInventory,
+  executeNodeRpc,
 } from "./bird.js";
 import { normalizeSession } from "./bird-session.js";
 import type { DeploymentService } from "./deployment-service.js";
@@ -291,14 +295,81 @@ export function createResourceApplicationService(
         if (!define || define.type !== "cidr4") fail(409, `源地址出口映射引用的 Define ${defineId} 不可用`);
         return define.name;
       }) ?? [];
+      const nodeManagedRules = sourcePolicyManagedRules(
+        state.sourcePolicies.filter((item) => item.enabled && resourceAppliesToNode(item, node.id)),
+      );
       return sourcePolicyManualPlan(
         node,
         current,
         previous,
         operation,
         sourcePolicy ? renderSourcePolicyEgress(sourcePolicy, internalDefineNames) : "",
+        nodeManagedRules,
       );
     });
+  }
+
+  function assertSourcePolicyAgentScope(state: Inventory, resource: SourcePolicyEgress, previous: SourcePolicyEgress | null): void {
+    for (const nodeId of resourceNodeIds(state, resource)) {
+      const node = findNode(state, nodeId);
+      if (node.transport !== "ssh") continue;
+      if (previous && resourceAppliesToNode(previous, node.id)) continue;
+      fail(409, `新源地址出口映射不能选择旧 SSH 节点“${node.name}”，请先升级该节点为 Agent`);
+    }
+  }
+
+  function assertSourcePolicyGatewaySafety(
+    state: Inventory,
+    resource: SourcePolicyEgress,
+    previous: SourcePolicyEgress | null,
+  ): void {
+    // Existing inventories are intentionally allowed to load and be upgraded.
+    // Only a newly introduced gateway/source conflict is rejected, so legacy
+    // nodes can still be promoted to Agent and repaired by the exception rule.
+    const afterConflicts = new Map<string, ReturnType<typeof sourcePolicyGatewayConflicts>[number]>();
+    const beforeResources = previous
+      ? state.sourcePolicies.map((item) => item.id === resource.id ? previous : item)
+      : state.sourcePolicies.filter((item) => item.id !== resource.id);
+    const nodes = resourceNodeIds(state, resource);
+    for (const nodeId of nodes) {
+      const after = state.sourcePolicies.filter((item) => item.enabled && resourceAppliesToNode(item, nodeId));
+      const before = beforeResources.filter((item) => item.enabled && resourceAppliesToNode(item, nodeId));
+      for (const conflict of sourcePolicyGatewayConflicts(after)) {
+        if (conflict.gatewayResourceId !== resource.id && conflict.sourceResourceId !== resource.id) continue;
+        const key = `${nodeId}|${conflict.gatewayResourceId}|${conflict.gatewayGroupId}|${conflict.sourceResourceId}|${conflict.sourceGroupId}|${conflict.source}`;
+        afterConflicts.set(key, conflict);
+      }
+      const beforeKeys = new Set(sourcePolicyGatewayConflicts(before).map((conflict) =>
+        `${nodeId}|${conflict.gatewayResourceId}|${conflict.gatewayGroupId}|${conflict.sourceResourceId}|${conflict.sourceGroupId}|${conflict.source}`));
+      for (const [key, conflict] of afterConflicts) {
+        if (beforeKeys.has(key)) continue;
+        fail(400, `出口地址 ${conflict.gateway} 落在源 CIDR ${conflict.source} 内（节点 ${nodeId}），请拆分源 CIDR 或更换出口地址`);
+      }
+      afterConflicts.clear();
+    }
+  }
+
+  function sourcePolicyRulesForNode(
+    node: ManagedNode,
+    inventory: Inventory,
+    previous: SourcePolicyEgress | null,
+  ): { removeRules: SourcePolicyRuleInstruction[]; rules: SourcePolicyRuleInstruction[] } {
+    const active = inventory.sourcePolicies.filter((item) => item.enabled && resourceAppliesToNode(item, node.id));
+    const rules = sourcePolicyManagedRules(active);
+    const removeRules = previous && previous.enabled && resourceAppliesToNode(previous, node.id)
+      ? sourcePolicyManagedRules([previous])
+      : [];
+    return { removeRules, rules };
+  }
+
+  async function applySourcePolicyRules(node: ManagedNode, inventory: Inventory, previous: SourcePolicyEgress | null): Promise<void> {
+    if (node.transport !== "agent") return;
+    const { removeRules, rules } = sourcePolicyRulesForNode(node, inventory, previous);
+    const result = await executeNodeRpc(node, "network.ip_rules", {
+      removeRules: removeRules.map(({ priority, source, destination, table, kind }) => ({ priority, source, destination, table, kind })),
+      rules: rules.map(({ priority, source, destination, table, kind }) => ({ priority, source, destination, table, kind })),
+    }, 60_000);
+    if (!result.ok) fail(502, result.stderr || result.stdout || `${node.name} 的 Agent 系统规则下发失败`);
   }
 
   return {
@@ -529,18 +600,27 @@ export function createResourceApplicationService(
     const validated = validateInventory(draft);
     const current = validated.sourcePolicies.find((item) => item.id === preview.id);
     if (!current) fail(500, "源地址出口映射预览生成失败");
+    assertSourcePolicyAgentScope(validated, current, existing);
+    assertSourcePolicyGatewaySafety(validated, current, existing);
     const manualPlans = sourcePolicyPlans(validated, current, existing, existing ? "update" : "create");
     return { status: 200, payload: { resource: current, manualPlans } };
   },
 
   async createSourcePolicy(body) {
+    let current: SourcePolicyEgress | null = null;
     const { state, result: resource, deployment } = await mutateAndApply(async (draft) => {
       const created = prepareSourcePolicyEgress({ ...body, id: makeId("source_policy") }, null, draft.sourcePolicies, makeId);
+      assertSourcePolicyAgentScope(draft, created, null);
       draft.sourcePolicies.push(created);
+      current = created;
       const candidate = validateInventory(draft);
+      assertSourcePolicyGatewaySafety(candidate, created, null);
       if (!created.enabled) await preflightSourcePolicy(candidate, created.id);
       return created;
-    }, (created, inventory) => resourceNodeIds(inventory, created));
+    }, (created, inventory) => resourceNodeIds(inventory, created), {
+      apply: async (node, inventory) => applySourcePolicyRules(node, inventory, null),
+      rollback: async (node, inventory) => applySourcePolicyRules(node, inventory, current),
+    });
     const applied = state.sourcePolicies.find((item) => item.id === resource.id) ?? resource;
     const manualPlans = sourcePolicyPlans(state, applied, null, "create");
     event("success", `已添加源地址出口映射 ${applied.label}`);
@@ -550,6 +630,7 @@ export function createResourceApplicationService(
   async updateSourcePolicy(resourceId, body) {
     let affectedNodeIds: string[] = [];
     let previous: SourcePolicyEgress | null = null;
+    let updatedForSync: SourcePolicyEgress | null = null;
     const { state, result: resource, deployment } = await mutateAndApply(async (draft) => {
       const index = draft.sourcePolicies.findIndex((item) => item.id === resourceId);
       if (index < 0) fail(404, "源地址出口映射不存在");
@@ -557,12 +638,18 @@ export function createResourceApplicationService(
       if (!existing) fail(404, "源地址出口映射不存在");
       previous = structuredClone(existing);
       const updated = prepareSourcePolicyEgress({ ...body, id: resourceId }, existing, draft.sourcePolicies, makeId);
+      assertSourcePolicyAgentScope(draft, updated, existing);
       draft.sourcePolicies[index] = updated;
+      updatedForSync = updated;
       affectedNodeIds = resourceChangeNodeIds(draft, existing, updated);
       const candidate = validateInventory(draft);
+      assertSourcePolicyGatewaySafety(candidate, updated, previous);
       if (!updated.enabled) await preflightSourcePolicy(candidate, resourceId);
       return updated;
-    }, () => affectedNodeIds);
+    }, () => affectedNodeIds, {
+      apply: async (node, inventory) => applySourcePolicyRules(node, inventory, previous),
+      rollback: async (node, inventory) => applySourcePolicyRules(node, inventory, updatedForSync),
+    });
     const applied = state.sourcePolicies.find((item) => item.id === resource.id) ?? resource;
     const manualPlans = sourcePolicyPlans(state, applied, previous, "update");
     event("success", `已更新源地址出口映射 ${applied.label}`);
@@ -571,15 +658,20 @@ export function createResourceApplicationService(
 
   async deleteSourcePolicy(resourceId) {
     let affectedNodeIds: string[] = [];
+    let deletedForSync: SourcePolicyEgress | null = null;
     const { state, result: resource, deployment } = await mutateAndApply((draft) => {
       const index = draft.sourcePolicies.findIndex((item) => item.id === resourceId);
       if (index < 0) fail(404, "源地址出口映射不存在");
       const target = draft.sourcePolicies[index];
       if (!target) fail(404, "源地址出口映射不存在");
       affectedNodeIds = resourceNodeIds(draft, target);
+      deletedForSync = target;
       draft.sourcePolicies.splice(index, 1);
       return target;
-    }, () => affectedNodeIds);
+    }, () => affectedNodeIds, {
+      apply: async (node, inventory) => applySourcePolicyRules(node, inventory, deletedForSync),
+      rollback: async (node, inventory) => applySourcePolicyRules(node, inventory, null),
+    });
     const manualPlans = sourcePolicyPlans(state, null, resource, "delete");
     event("warning", `已删除源地址出口映射 ${resource.label}；请完成待办的系统规则清理`);
     return { status: 200, payload: { inventory: state, deployment, manualPlans, events } };

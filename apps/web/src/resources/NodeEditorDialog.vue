@@ -39,7 +39,7 @@ const { dashboard } = useDashboardStore();
 
 const draft = reactive<NodeDraft>({
   name: "",
-  transport: "ssh",
+  transport: "agent",
   sshHost: "",
   sshPort: 22,
   sshUser: "",
@@ -82,7 +82,7 @@ function resetDraft(node: ManagedNode | null): void {
   systemPreset.value = node?.mainConfigPath === "/etc/bird.conf" ? "openwrt" : "linux";
   Object.assign(draft, {
     name: node?.name ?? "",
-    transport: node?.transport ?? "ssh",
+    transport: node?.transport ?? "agent",
     sshHost: node?.sshHost ?? "",
     sshPort: node?.sshPort ?? 22,
     sshUser: node?.sshUser ?? "",
@@ -352,7 +352,6 @@ onBeforeUnmount(() => {
       <div class="dialog-head"><span class="dialog-icon">N</span><div><p class="eyebrow">资产</p><h2 id="nodeDialogTitle">{{ editing ? "编辑受管节点" : "添加受管节点" }}</h2></div></div>
       <div class="dialog-grid">
         <div class="field full-width"><label for="nodeEditorName">节点名称</label><input id="nodeEditorName" v-model.trim="draft.name" maxlength="80" required></div>
-        <div class="field full-width"><span class="field-label">管理方式</span><div v-if="editing && draft.transport === 'local'" class="field-readonly">本机</div><div v-else class="segmented-control" role="radiogroup" aria-label="节点管理方式"><label><input v-model="draft.transport" type="radio" value="ssh" :disabled="editing"><span>SSH（主控连接）</span></label><label><input v-model="draft.transport" type="radio" value="agent" :disabled="editing"><span>Agent（节点主动连接）</span></label></div></div>
         <template v-if="isSsh">
           <div id="sshHostField" class="field"><label for="nodeEditorSshHost">SSH 连接地址</label><input id="nodeEditorSshHost" v-model.trim="draft.sshHost" placeholder="公网地址或可解析主机名" required><small v-if="editing">可修改为公网地址；已有会话和 IGP 地址不会被自动改写。</small></div>
           <div class="field"><label for="nodeEditorSshUser">SSH 用户</label><input id="nodeEditorSshUser" v-model.trim="draft.sshUser" placeholder="birdbox" required :disabled="editing"></div>
@@ -378,7 +377,7 @@ onBeforeUnmount(() => {
         </section>
         <section v-if="!editing && globalSourcePolicies.length" id="nodeGlobalSourcePolicyWarning" class="node-rpki-warning full-width" role="status" aria-live="polite">
           <div class="node-rpki-warning-head"><strong>全节点源地址出口映射</strong><span>{{ globalSourcePolicies.length }} 个映射集</span></div>
-          <p>新节点接入时会自动下发这些 BIRD 映射，但系统 ip rule 不会自动配置。节点添加成功后，请打开对应映射集并按该节点的手工操作计划完成规则配置。</p>
+          <p>新节点接入时会自动下发这些 BIRD 映射和系统 ip rule。若映射仍包含旧 SSH 节点，请先升级该节点为 Agent，旧节点不会被自动执行规则。</p>
           <ul><li v-for="resource in globalSourcePolicies" :key="resource.id"><strong>{{ resource.label }}</strong><div><span>规模</span><code>{{ resource.groups.length }} 个出口组 · {{ resource.groups.reduce((count, group) => count + group.sources.length, 0) }} 条源 CIDR</code></div><p class="node-rpki-action"><span>处理</span>不适用于该节点时，请先把映射集作用域改为指定节点。</p></li></ul>
         </section>
         <section v-if="!editing" id="nodeOnboardingPanel" class="node-onboarding full-width">

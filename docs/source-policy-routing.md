@@ -27,6 +27,15 @@ Birdbox 的“源地址出口映射”用于把一批 IPv4 源 CIDR 映射到一
 
 Birdbox 自动分配 BIRD table 名、Protocol 名和 `ip rule` priority。每个出口组的 Linux kernel table 默认从 200–10000 中自动选择；如果节点已有路由表，可在出口组中手工填写 1–2147483647 的 table ID（不能使用 0、253、254、255，也不能与节点已有策略冲突）。
 
+为避免递归出口地址被源策略表再次接管，Birdbox 会为每个出口地址额外生成一条优先级更高的目的地址例外规则，将该地址固定查询 Linux `main` 表：
+
+```sh
+ip -4 rule add priority 9xxx to 172.20.177.36/32 table main
+ip -4 rule add priority 10xxx from 162.141.136.139/32 table 200
+```
+
+同一节点上共享出口地址的映射会合并目的地址规则。新建或修改映射时，如果新增的出口地址落在任意源 CIDR 内，Birdbox 会拒绝保存并提示拆分 CIDR 或更换出口地址；历史库存中的此类配置仍可加载，便于先升级旧 SSH 节点为 Agent，再由 Agent 接管并补齐例外规则。
+
 ## BIRD 生成方式
 
 每个出口组生成：
@@ -56,7 +65,7 @@ protocol kernel bb_spe_k_xxx {
 
 ## Linux 和 OpenWrt 操作
 
-Birdbox 不会自动执行 `ip rule` 或修改 OpenWrt UCI。保存映射集后，编辑器会按节点显示手工操作计划，并为 Linux 节点生成完整的 systemd unit 和安装/更新脚本。
+Agent 节点保存映射集后会自动执行并持久化同步 `ip rule`，不需要用户手工登录节点。旧 SSH 节点仍保留脚本/LuCI 兼容计划，但会明确提示先升级为 Agent；新建映射不能选择旧 SSH 节点。升级旧节点时，Agent 会先按现有映射接管已有规则，后续修改由 Agent 自动维护。
 
 Linux 节点提供幂等 root 脚本，脚本仅删除同一映射集上一次已知的精确规则，再添加当前规则：
 
@@ -66,9 +75,9 @@ ip -4 rule add priority 31504 from 162.141.136.139/32 table 200
 
 需要重启后恢复时，直接以 root 执行“systemd 安装/更新脚本”。脚本会写入 `/usr/local/lib/birdbox/source-policy-<id>.sh`、`/etc/systemd/system/birdbox-source-policy-<id>.service`，执行 `daemon-reload`、`enable` 和 `restart`。更新映射后重新执行新脚本即可；删除或停用映射时执行界面提供的 systemd 卸载脚本。
 
-OpenWrt 节点显示 LuCI 的 IPv4 Rules 参数清单：Priority、Source 和 Lookup table。更新或停用时，清单会先列出需要删除的旧规则，再列出当前规则；必须按该顺序操作。不同 LuCI 版本的菜单名称可能略有差异；如果没有对应页面，可用清单中的值配置等价的 `ip rule`。
+只有尚未升级的旧 SSH OpenWrt 节点才显示 LuCI 的 IPv4 Rules 参数清单：Priority、Source、Destination（出口例外规则）和 Lookup table。Agent OpenWrt 节点使用结构化 RPC 自动更新规则，不需要手工操作。
 
-删除或停用映射集后，先执行编辑器提供的清理脚本或在 LuCI 删除相同规则。否则会残留无主 `ip rule`。
+删除或停用映射集后，Agent 会自动清理对应规则；旧 SSH 节点仍需按兼容计划执行清理脚本或在 LuCI 删除相同规则。
 
 ## 校验和限制
 

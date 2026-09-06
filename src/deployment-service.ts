@@ -23,6 +23,11 @@ interface DeploymentTarget {
   config: NodeConfigBundle;
 }
 
+export interface DeploymentHooks {
+  apply?(node: ManagedNode, inventory: Inventory): Promise<void>;
+  rollback?(node: ManagedNode, inventory: Inventory): Promise<void>;
+}
+
 export interface ActiveDeploymentJournal {
   id: string;
   direction: DeploymentDirection;
@@ -145,13 +150,15 @@ export class DeploymentService {
   async mutateAndApply<Result>(
     mutator: (draft: Inventory) => Promise<Result> | Result,
     nodeIdsForDraft: string[] | ((result: Result, inventory: Inventory) => string[]),
+    hooks: DeploymentHooks = {},
   ): Promise<{ state: Inventory; result: Result; deployment: DeploymentReport }> {
     return this.#options.withDeploymentLock(async () => {
       const attemptedNodes: ManagedNode[] = [];
       let committed = false;
       let journal: ActiveDeploymentJournal | null = null;
+      let current: Inventory | null = null;
       try {
-        const current = await this.#options.store.read();
+        current = await this.#options.store.read();
         const draft = structuredClone(current);
         const mutation = await mutator(draft);
         const inventory = validateInventory(draft);
@@ -169,6 +176,7 @@ export class DeploymentService {
           const target = journal?.forwardTargets.find((item) => item.node.id === node.id);
           const applied = await applyStagedConfig(node, target?.config ?? this.#options.configForNode(inventory, node));
           if (!applied.ok) this.#options.fail(500, applied.stderr || applied.stdout || `${node.name} 的 BIRD 配置应用失败`);
+          if (hooks.apply) await hooks.apply(node, inventory);
         }
         const state = await this.#options.store.replace(current, inventory);
         committed = true;
@@ -195,6 +203,14 @@ export class DeploymentService {
             if (!rollback.ok) {
               rollbackSucceeded = false;
               this.#options.addEvent("error", `${node.name} 回滚失败：${rollback.stderr || rollback.stdout}`, node.id);
+            }
+            if (hooks.rollback) {
+              try {
+                await hooks.rollback(node, current!);
+              } catch (hookError) {
+                rollbackSucceeded = false;
+                this.#options.addEvent("error", `${node.name} 系统规则回滚失败：${hookError instanceof Error ? hookError.message : String(hookError)}`, node.id);
+              }
             }
           }
           if (journal && journalMarkedForRollback && rollbackSucceeded) {

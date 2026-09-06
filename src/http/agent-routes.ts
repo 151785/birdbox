@@ -13,7 +13,7 @@ interface AgentRoutesOptions { broker: AgentBroker; binaryPath?: string; }
 function binaryForArch(base: string, requested: unknown): string {
   const arch = String(requested ?? "").toLowerCase();
   if (!arch) return base;
-  const mapped: Record<string, string> = { x64: "amd64", "x86_64": "amd64", amd64: "amd64", "aarch64": "arm64", arm64: "arm64", armv7l: "arm", arm: "arm", mips: "mips", mipsel: "mipsle", mips64: "mips64", riscv64: "riscv64" };
+  const mapped: Record<string, string> = { x64: "amd64", "x86_64": "amd64", amd64: "amd64", "aarch64": "arm64", arm64: "arm64", armv7l: "arm", arm: "arm", mips: "mips", mipsel: "mipsle", mipsle: "mipsle", mips64: "mips64", riscv64: "riscv64" };
   const suffix = mapped[arch];
   if (!suffix) throw new Error("不支持的 Agent 架构");
   return path.extname(base) ? `${path.dirname(base)}/birdbox-agent-${suffix}` : path.join(base, `birdbox-agent-${suffix}`);

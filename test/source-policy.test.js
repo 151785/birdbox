@@ -6,6 +6,8 @@ import {
   normalizeSourcePolicyEgress,
   prepareSourcePolicyEgress,
   renderBirdConfig,
+  sourcePolicyGatewayRules,
+  sourcePolicyManagedRules,
   sourcePolicyManualPlan,
   sourcePolicyRules,
   validateInventory,
@@ -144,6 +146,30 @@ test("renders BIRD tables, recursive defaults, kernel exports, and optional inte
   assert.doesNotMatch(config, /persist;/);
 });
 
+test("adds underlay exceptions for source-policy gateways and deduplicates shared gateways", () => {
+  const current = resource();
+  const gateways = sourcePolicyGatewayRules(current);
+  assert.equal(gateways.length, 2);
+  assert.ok(gateways.every((rule) => rule.kind === "gateway" && rule.source === null && rule.destination?.endsWith("/32") && rule.table === 254));
+  assert.ok(gateways.every((rule) => rule.priority < current.rulePriorityBase));
+
+  const sharedGateway = { ...current, id: "source_policy_shared", groups: [{ ...current.groups[0], sources: ["198.51.100.1/32"] }] };
+  const managed = sourcePolicyManagedRules([current, sharedGateway]);
+  assert.equal(managed.filter((rule) => rule.kind === "gateway" && rule.destination === "172.20.177.36/32").length, 1);
+  const plan = sourcePolicyManualPlan(local, current, null, "create", "");
+  assert.match(plan.applyScript, /to '172\.20\.177\.36\/32' table main/);
+  assert.match(plan.applyScript, /from '162\.141\.136\.139\/32' table 200/);
+});
+
+test("allows a legacy source CIDR that contains its configured gateway", () => {
+  const state = inventory({ nodes: [local], sourcePolicies: [resource({
+    groups: [{ id: "unsafe", egressAddress: "192.0.2.1", sources: ["192.0.2.0/24"], kernelTable: 200, ruleSlot: 0 }],
+  })] });
+  // The destination exception makes the forwarding path safe; the inventory
+  // remains load-compatible so an existing SSH mapping can be upgraded first.
+  assert.doesNotThrow(() => validateInventory(state));
+});
+
 test("creates Linux scripts and OpenWrt LuCI checklists without automated host changes", () => {
   const current = resource();
   const linuxPlan = sourcePolicyManualPlan(local, current, null, "create", "protocol static test { }");
@@ -178,4 +204,21 @@ test("creates Linux scripts and OpenWrt LuCI checklists without automated host c
   const disabledUpdatePlan = sourcePolicyManualPlan(local, disabled, current, "update", "");
   assert.equal(disabledUpdatePlan.rules.length, 0);
   assert.match(disabledUpdatePlan.cleanupScript, /ip -4 rule del priority 10000/);
+});
+
+test("marks Agent source-policy plans for automatic rule management", () => {
+  const agent = { ...local, id: "agent", transport: "agent" };
+  const mapped = { ...resource(), nodeIds: ["agent"] };
+  const plan = sourcePolicyManualPlan(agent, mapped, null, "create", "protocol static test { }");
+  assert.equal(plan.management, "agent");
+  assert.equal(plan.upgradeRequired, false);
+  assert.equal(plan.warning, null);
+  assert.match(plan.instructions[0], /Agent/);
+});
+
+test("marks legacy SSH source-policy plans with an upgrade warning", () => {
+  const plan = sourcePolicyManualPlan(remote, { ...resource(), nodeIds: [remote.id] }, null, "create", "");
+  assert.equal(plan.management, "manual");
+  assert.equal(plan.upgradeRequired, true);
+  assert.match(plan.warning, /升级为 Agent/);
 });

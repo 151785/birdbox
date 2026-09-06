@@ -145,6 +145,7 @@ exit 0
   });
   const nodePayload = {
     name: "Managed SSH node",
+    transport: "ssh",
     sshHost: "router.example",
     sshUser: "birdbox",
     routerId: "192.0.2.1",

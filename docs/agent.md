@@ -4,7 +4,7 @@ Agent 是受管节点的主动连接模式。节点上的 `birdbox-agent` 以 ro
 
 ## 新建 Agent 节点
 
-1. 在节点管理中选择“Agent（节点主动连接）”，填写节点名称、Router ID、BIRD 主配置、生成配置和 Socket 路径。
+1. 在节点管理中点击“添加节点”，填写节点名称、Router ID、BIRD 主配置、生成配置和 Socket 路径。新建节点默认且只能使用 Agent；页面不再提供 SSH 新建选项。
 2. 点击“生成准备脚本”，在目标 Linux/OpenWrt 节点以 root 执行完整脚本。
 3. 脚本会按节点架构下载并校验 SHA-256 后安装 Agent、生成 systemd unit 或 OpenWrt procd 服务、写入 `/etc/birdbox/agent.env`，并为 BIRD 增加生成配置 include。
 4. 等待 Agent 注册后点击“测试连接”，确认通过后保存节点。

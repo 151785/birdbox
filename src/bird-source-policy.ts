@@ -24,6 +24,11 @@ export const MAX_SOURCE_POLICY_SOURCES_PER_GROUP = 64;
 export const SOURCE_POLICY_PRIORITY_MIN = 10000;
 export const SOURCE_POLICY_PRIORITY_WIDTH = MAX_SOURCE_POLICY_GROUPS * MAX_SOURCE_POLICY_SOURCES_PER_GROUP;
 export const SOURCE_POLICY_PRIORITY_MAX = 32765;
+// Gateway destination exceptions must run before every source-policy rule.
+// Keep this range below SOURCE_POLICY_PRIORITY_MIN and derive a stable value
+// from the gateway address so shared gateways can be deduplicated safely.
+export const SOURCE_POLICY_GATEWAY_PRIORITY_MIN = 9000;
+export const SOURCE_POLICY_GATEWAY_PRIORITY_WIDTH = 1000;
 export const SOURCE_POLICY_TABLE_MIN = 1;
 export const SOURCE_POLICY_TABLE_MAX = 2147483647;
 export const SOURCE_POLICY_AUTO_TABLE_MIN = 200;
@@ -219,10 +224,99 @@ export function sourcePolicyRules(resource: SourcePolicyEgress): SourcePolicyRul
   return resource.groups.flatMap((group) => group.sources.map((source, index) => ({
     priority: resource.rulePriorityBase + group.ruleSlot * MAX_SOURCE_POLICY_SOURCES_PER_GROUP + index,
     source,
+    destination: null,
+    kind: "source" as const,
     table: group.kernelTable,
     egressAddress: group.egressAddress,
     groupId: group.id,
   })));
+}
+
+function gatewayPriority(address: string): number {
+  return SOURCE_POLICY_GATEWAY_PRIORITY_MIN + stableNumber(`gateway:${address}`) % SOURCE_POLICY_GATEWAY_PRIORITY_WIDTH;
+}
+
+/** Rules that keep recursive BIRD next hops on the normal underlay table. */
+export function sourcePolicyGatewayRules(resource: SourcePolicyEgress): SourcePolicyRuleInstruction[] {
+  return resource.groups.map((group) => ({
+    priority: gatewayPriority(group.egressAddress),
+    source: null,
+    destination: `${group.egressAddress}/32`,
+    kind: "gateway" as const,
+    // Linux table 254 is the built-in main table. It is only valid for the
+    // destination exception; ordinary source rules cannot target it.
+    table: 254,
+    egressAddress: group.egressAddress,
+    groupId: group.id,
+  }));
+}
+
+function ruleKey(rule: SourcePolicyRuleInstruction): string {
+  return `${rule.kind}|${rule.priority}|${rule.source ?? ""}|${rule.destination ?? ""}|${rule.table}`;
+}
+
+function uniqueRules(rules: readonly SourcePolicyRuleInstruction[]): SourcePolicyRuleInstruction[] {
+  return [...new Map(rules.map((rule) => [ruleKey(rule), rule])).values()];
+}
+
+/** Build the complete managed rule set for one node, deduplicating gateways. */
+export function sourcePolicyManagedRules(resources: readonly SourcePolicyEgress[]): SourcePolicyRuleInstruction[] {
+  const gateways = new Map<string, SourcePolicyRuleInstruction>();
+  for (const resource of resources) {
+    for (const rule of sourcePolicyGatewayRules(resource)) {
+      const key = `${rule.destination}|${rule.table}`;
+      if (!gateways.has(key)) gateways.set(key, rule);
+    }
+  }
+  return uniqueRules([
+    ...gateways.values(),
+    ...resources.flatMap((resource) => sourcePolicyRules(resource)),
+  ]);
+}
+
+export interface SourcePolicyGatewayConflict {
+  gatewayResourceId: string;
+  gatewayResourceLabel: string;
+  gatewayGroupId: string;
+  gateway: string;
+  sourceResourceId: string;
+  sourceResourceLabel: string;
+  sourceGroupId: string;
+  source: string;
+}
+
+function addressNumber(address: string): number {
+  const octets = address.split(".").map(Number);
+  return ((((octets[0] ?? 0) << 24) | ((octets[1] ?? 0) << 16) | ((octets[2] ?? 0) << 8) | (octets[3] ?? 0)) >>> 0);
+}
+
+/** Find gateways which would themselves be covered by a source selector. */
+export function sourcePolicyGatewayConflicts(resources: readonly SourcePolicyEgress[]): SourcePolicyGatewayConflict[] {
+  const conflicts: SourcePolicyGatewayConflict[] = [];
+  for (const gatewayResource of resources) {
+    for (const gatewayGroup of gatewayResource.groups) {
+      const gateway = addressNumber(gatewayGroup.egressAddress);
+      for (const sourceResource of resources) {
+        for (const sourceGroup of sourceResource.groups) {
+          for (const source of sourceGroup.sources) {
+            const [start, end] = cidrRange(source);
+            if (gateway < start || gateway > end) continue;
+            conflicts.push({
+              gatewayResourceId: gatewayResource.id,
+              gatewayResourceLabel: gatewayResource.label,
+              gatewayGroupId: gatewayGroup.id,
+              gateway: gatewayGroup.egressAddress,
+              sourceResourceId: sourceResource.id,
+              sourceResourceLabel: sourceResource.label,
+              sourceGroupId: sourceGroup.id,
+              source,
+            });
+          }
+        }
+      }
+    }
+  }
+  return conflicts;
 }
 
 export function renderSourcePolicyEgress(
@@ -247,12 +341,12 @@ export function renderSourcePolicyEgress(
   return output;
 }
 
-function ruleKey(rule: SourcePolicyRuleInstruction): string {
-  return `${rule.priority}|${rule.source}|${rule.table}`;
-}
-
 function shellRule(rule: SourcePolicyRuleInstruction, action: "add" | "del"): string {
-  return `ip -4 rule ${action} priority ${rule.priority} from '${rule.source}' table ${rule.table}`;
+  const selector = rule.kind === "gateway"
+    ? `to '${rule.destination}'`
+    : `from '${rule.source}'`;
+  const table = rule.table === 254 ? "main" : String(rule.table);
+  return `ip -4 rule ${action} priority ${rule.priority} ${selector} table ${table}`;
 }
 
 function renderApplyScript(removeRules: readonly SourcePolicyRuleInstruction[], rules: readonly SourcePolicyRuleInstruction[]): string {
@@ -293,10 +387,6 @@ function systemdPaths(resourceId: string): { unitName: string; unitPath: string;
     unitPath: "/etc/systemd/system/" + unitName,
     helperPath: "/usr/local/lib/birdbox/source-policy-" + resourceId + ".sh",
   };
-}
-
-function uniqueRules(rules: readonly SourcePolicyRuleInstruction[]): SourcePolicyRuleInstruction[] {
-  return [...new Map(rules.map((rule) => [ruleKey(rule), rule])).values()];
 }
 
 function renderSystemdHelperScript(
@@ -397,24 +487,39 @@ export function sourcePolicyManualPlan(
   previous: SourcePolicyEgress | null,
   operation: SourcePolicyManualPlan["operation"],
   birdConfig: string,
+  nodeManagedRules: readonly SourcePolicyRuleInstruction[] | null = null,
 ): SourcePolicyManualPlan {
   const rules = current && current.enabled && resourceAppliesToNode(current, node.id) ? sourcePolicyRules(current) : [];
+  const gatewayRules = current && current.enabled && resourceAppliesToNode(current, node.id) ? sourcePolicyGatewayRules(current) : [];
   // A disabled mapping never installs system rules, so it has nothing to clean up.
   const oldRules = previous?.enabled && resourceAppliesToNode(previous, node.id) ? sourcePolicyRules(previous) : [];
   const removeRules = oldRules;
+  const removeGatewayRules = previous?.enabled && resourceAppliesToNode(previous, node.id) ? sourcePolicyGatewayRules(previous) : [];
+  const managedRules = nodeManagedRules ? [...nodeManagedRules] : uniqueRules([...gatewayRules, ...rules]);
+  const removeManagedRules = uniqueRules([...removeGatewayRules, ...removeRules]);
   const platform = node.mainConfigPath === "/etc/bird.conf" ? "openwrt" : "linux";
-  const applyScript = platform === "linux" && rules.length ? renderApplyScript(removeRules, rules) : null;
-  const cleanupScript = renderCleanupScript(removeRules);
-  const systemdUnit = platform === "linux" && rules.length
+  const management = node.transport === "agent" ? "agent" : node.transport === "local" ? "local" : "manual";
+  const upgradeRequired = management === "manual";
+  const applyScript = platform === "linux" && managedRules.length ? renderApplyScript(removeManagedRules, managedRules) : null;
+  const cleanupScript = renderCleanupScript(removeManagedRules);
+  const systemdUnit = platform === "linux" && managedRules.length
     ? renderSystemdUnit(current?.id ?? previous?.id ?? "source_policy")
     : null;
-  const systemdInstallScript = platform === "linux" && (rules.length || removeRules.length)
-    ? renderSystemdInstallScript(current?.id ?? previous?.id ?? "source_policy", removeRules, rules)
+  const systemdInstallScript = platform === "linux" && (managedRules.length || removeManagedRules.length)
+    ? renderSystemdInstallScript(current?.id ?? previous?.id ?? "source_policy", removeManagedRules, managedRules)
     : null;
-  const instructions = platform === "openwrt"
+  const warning = upgradeRequired
+    ? `节点“${node.name}”仍使用旧 SSH 管理方式。请先升级为 Agent，源地址出口系统规则才能自动下发。`
+    : null;
+  const instructions = management !== "manual"
+    ? [
+        management === "agent" ? "系统 ip rule 将由节点 Agent 自动下发并保持幂等。" : "本机节点将由 Birdbox 自动执行系统规则。",
+        "可使用节点运行详情核对 ip rule 与策略路由表。",
+      ]
+    : platform === "openwrt"
     ? [
         "在 LuCI 的 Network -> Routing -> IPv4 Rules 中添加或更新以下规则。",
-        "规则的 Priority、源地址和 Lookup table 必须与清单完全一致。",
+        "规则的 Priority、源地址/目标地址和 Lookup table 必须与清单完全一致。",
         "完成后重新读取 BIRD 路由，确认对应表中存在递归默认路由。",
       ]
     : [
@@ -432,10 +537,17 @@ export function sourcePolicyManualPlan(
     birdConfig,
     rules,
     removeRules,
+    gatewayRules,
+    removeGatewayRules,
+    managedRules,
+    removeManagedRules,
     applyScript,
     cleanupScript,
     systemdUnit,
     systemdInstallScript,
     instructions,
+    management,
+    upgradeRequired,
+    warning,
   };
 }

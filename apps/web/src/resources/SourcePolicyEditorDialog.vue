@@ -55,7 +55,13 @@ const draft = reactive<Draft>({
 
 const editing = computed(() => editingId.value !== null && !deleted.value);
 const inventory = computed(() => dashboard.value?.inventory ?? null);
-const nodes = computed(() => inventory.value?.nodes ?? []);
+const nodes = computed(() => {
+  const all = inventory.value?.nodes ?? [];
+  // New mappings are Agent-only; retain SSH nodes while editing legacy mappings
+  // so their scope can be reviewed and upgraded without losing compatibility.
+  if (editingId.value !== null) return all;
+  return all.filter((node) => node.transport !== "ssh");
+});
 const nodeNames = computed(() => new Map(nodes.value.map((node) => [node.id, node.name])));
 const defines = computed(() => (inventory.value?.defines ?? []).filter((item) => item.type === "cidr4" && item.enabled));
 const selectedPlan = computed(() => plans.value[selectedPlanIndex.value] ?? plans.value[0] ?? null);
@@ -86,7 +92,11 @@ function open(resource: SourcePolicyEgress | null): void {
   previewPending.value = false;
   previewError.value = "";
   Object.assign(draft, {
-    nodeIds: resource?.nodeIds === null || !resource ? null : [...resource.nodeIds],
+    nodeIds: resource?.nodeIds === null
+      ? null
+      : resource?.nodeIds
+        ? [...resource.nodeIds]
+        : (nodes.value.length ? nodes.value.map((node) => node.id) : []),
     label: resource?.label ?? "",
     groups: resource?.groups.map((group) => ({ id: group.id, egressAddress: group.egressAddress, kernelTable: group.kernelTable, sources: [...group.sources] })) ?? [emptyGroup()],
     copyInternalRoutes: resource?.copyInternalRoutes ?? true,
@@ -258,7 +268,8 @@ async function save(): Promise<void> {
     selectedPlanIndex.value = 0;
     await loadDashboard(draft.nodeIds?.[0] ?? dashboard.value?.node?.id ?? null, dashboard.value?.selectedPeer?.id ?? null);
     window.dispatchEvent(new CustomEvent("birdbox:resource-tab-select", { detail: { target: "sourcePolicies" } }));
-    dispatchToast(`${id ? "源地址出口映射已更新" : "源地址出口映射已添加"}；BIRD 已下发，请完成系统规则手工操作`, "success");
+    const legacy = result.manualPlans.some((plan) => plan.upgradeRequired);
+    dispatchToast(`${id ? "源地址出口映射已更新" : "源地址出口映射已添加"}；BIRD 与 Agent 系统规则已处理${legacy ? "，仍有旧 SSH 节点需要升级 Agent" : ""}`, legacy ? "" : "success");
   } catch (error) {
     presentFormError(form.value, error, fieldMappings);
   } finally {
@@ -268,7 +279,7 @@ async function save(): Promise<void> {
 
 async function remove(): Promise<void> {
   const resource = editingId.value ? inventory.value?.sourcePolicies.find((item) => item.id === editingId.value) : null;
-  if (!resource || !window.confirm(`删除源地址出口映射“${resource.label}”？删除后仍需清理系统规则。`)) return;
+  if (!resource || !window.confirm(`删除源地址出口映射“${resource.label}”？将同时下发系统规则清理。`)) return;
   pending.value = true;
   try {
     const result = await api<{ manualPlans: SourcePolicyManualPlan[] }>(`/api/source-policies/${encodeURIComponent(resource.id)}`, { method: "DELETE" });
@@ -276,7 +287,8 @@ async function remove(): Promise<void> {
     selectedPlanIndex.value = 0;
     deleted.value = true;
     await loadDashboard(dashboard.value?.node?.id ?? null, dashboard.value?.selectedPeer?.id ?? null);
-    dispatchToast("映射集已删除，请完成系统规则清理", "success");
+    const legacy = result.manualPlans.some((plan) => plan.upgradeRequired);
+    dispatchToast(`映射集已删除，系统规则已处理${legacy ? "，旧 SSH 节点仍需手工清理" : ""}`, legacy ? "" : "success");
   } catch (error) {
     presentFormError(form.value!, error, fieldMappings);
   } finally {
@@ -352,30 +364,31 @@ onBeforeUnmount(() => {
           <label class="toggle-row full-width" for="sourcePolicyEnabled"><span><strong>启用映射集</strong></span><input id="sourcePolicyEnabled" v-model="draft.enabled" type="checkbox"><i aria-hidden="true"></i></label>
         </div>
         <section class="source-policy-preview full-width" aria-labelledby="sourcePolicyPreviewTitle">
-          <div class="source-policy-section-head"><div><h3 id="sourcePolicyPreviewTitle">手工操作计划</h3><small>BIRD 配置由 Birdbox 下发；Linux/OpenWrt 的系统规则需要你在节点上手工完成。<span v-if="previewPending">正在更新草稿预览…</span></small></div><select v-if="plans.length > 1" v-model.number="selectedPlanIndex" aria-label="选择节点"><option v-for="(plan, index) in plans" :key="plan.nodeId" :value="index">{{ plan.nodeName }}</option></select></div>
+          <div class="source-policy-section-head"><div><h3 id="sourcePolicyPreviewTitle">下发预览</h3><small>BIRD 配置会随映射集下发；Agent 节点的系统规则会自动同步。<span v-if="previewPending">正在更新草稿预览…</span></small></div><select v-if="plans.length > 1" v-model.number="selectedPlanIndex" aria-label="选择节点"><option v-for="(plan, index) in plans" :key="plan.nodeId" :value="index">{{ plan.nodeName }}</option></select></div>
           <p v-if="previewError" class="form-error">{{ previewError }}</p>
           <div v-if="selectedPlan" class="source-policy-plan">
-            <div class="source-policy-plan-status"><strong>{{ selectedPlan.nodeName }}</strong><span>{{ selectedPlan.platform === "openwrt" ? "OpenWrt LuCI" : "Linux" }}</span><span>{{ selectedPlan.rules.length }} 条规则</span></div>
+            <div class="source-policy-plan-status"><strong>{{ selectedPlan.nodeName }}</strong><span>{{ selectedPlan.management === "agent" ? "Agent 自动下发" : selectedPlan.management === "local" ? "本机自动下发" : "旧 SSH 手工" }}</span><span>{{ selectedPlan.managedRules.length }} 条系统规则</span></div>
+            <p v-if="selectedPlan.warning" class="form-error" role="alert">{{ selectedPlan.warning }}</p>
             <div class="source-policy-code-grid">
               <div><div class="source-policy-code-head"><span>BIRD 配置片段</span></div><pre>{{ selectedPlan.birdConfig || "删除后不再生成 BIRD 片段" }}</pre></div>
-              <div v-if="selectedPlan.platform === 'linux'"><div class="source-policy-code-head"><span>Linux root 脚本</span><button class="compact-command" type="button" :disabled="!(selectedPlan.applyScript || selectedPlan.cleanupScript)" @click="copyScript">复制脚本</button></div><pre>{{ selectedPlan.applyScript || selectedPlan.cleanupScript || "无需要执行的规则" }}</pre></div>
-              <div v-else class="source-policy-openwrt">
+              <div v-if="selectedPlan.management === 'manual' && selectedPlan.platform === 'linux'"><div class="source-policy-code-head"><span>Linux root 脚本</span><button class="compact-command" type="button" :disabled="!(selectedPlan.applyScript || selectedPlan.cleanupScript)" @click="copyScript">复制脚本</button></div><pre>{{ selectedPlan.applyScript || selectedPlan.cleanupScript || "无需要执行的规则" }}</pre></div>
+              <div v-else-if="selectedPlan.management === 'manual'" class="source-policy-openwrt">
                 <div v-if="selectedPlan.removeRules.length" class="source-policy-code-head"><span>1. 先在 LuCI 删除旧规则</span></div>
-                <ol v-if="selectedPlan.removeRules.length"><li v-for="rule in selectedPlan.removeRules" :key="`remove:${rule.priority}:${rule.source}`"><code>Priority {{ rule.priority }}</code><code>from {{ rule.source }}</code><code>lookup {{ rule.table }}</code></li></ol>
-                <div class="source-policy-code-head"><span>{{ selectedPlan.removeRules.length ? "2. 再添加当前规则" : "OpenWrt LuCI 规则清单" }}</span></div>
-                <ol><li v-for="rule in selectedPlan.rules" :key="`${rule.priority}:${rule.source}`"><code>Priority {{ rule.priority }}</code><code>from {{ rule.source }}</code><code>lookup {{ rule.table }}</code></li></ol>
+                <ol v-if="selectedPlan.removeManagedRules.length"><li v-for="rule in selectedPlan.removeManagedRules" :key="`remove:${rule.kind}:${rule.priority}:${rule.source ?? rule.destination}`"><code>Priority {{ rule.priority }}</code><code v-if="rule.kind === 'gateway'">to {{ rule.destination }}</code><code v-else>from {{ rule.source }}</code><code>lookup {{ rule.table === 254 ? "main" : rule.table }}</code></li></ol>
+                <div class="source-policy-code-head"><span>{{ selectedPlan.removeManagedRules.length ? "2. 再添加当前规则" : "OpenWrt LuCI 规则清单" }}</span></div>
+                <ol><li v-for="rule in selectedPlan.managedRules" :key="`${rule.kind}:${rule.priority}:${rule.source ?? rule.destination}`"><code>Priority {{ rule.priority }}</code><code v-if="rule.kind === 'gateway'">to {{ rule.destination }}</code><code v-else>from {{ rule.source }}</code><code>lookup {{ rule.table === 254 ? "main" : rule.table }}</code></li></ol>
               </div>
             </div>
-            <div v-if="selectedPlan.platform === 'linux' && selectedPlan.systemdInstallScript" class="source-policy-systemd">
+            <div v-if="selectedPlan.management === 'manual' && selectedPlan.platform === 'linux' && selectedPlan.systemdInstallScript" class="source-policy-systemd">
               <div class="source-policy-section-head"><div><h3>systemd 持久化</h3><small>安装脚本会写入 helper 和 unit，执行 daemon-reload、enable，并立即重启服务。</small></div></div>
               <div class="source-policy-code-grid">
                 <div v-if="selectedPlan.systemdUnit"><div class="source-policy-code-head"><span>systemd unit</span><button class="compact-command" type="button" @click="copySystemdUnit">复制 unit</button></div><pre>{{ selectedPlan.systemdUnit }}</pre></div>
-                <div><div class="source-policy-code-head"><span>{{ selectedPlan.rules.length ? "systemd 安装/更新脚本" : "systemd 卸载脚本" }}</span><button class="compact-command" type="button" @click="copySystemdInstallScript">复制脚本</button></div><pre>{{ selectedPlan.systemdInstallScript }}</pre></div>
+                <div><div class="source-policy-code-head"><span>{{ selectedPlan.managedRules.length ? "systemd 安装/更新脚本" : "systemd 卸载脚本" }}</span><button class="compact-command" type="button" @click="copySystemdInstallScript">复制脚本</button></div><pre>{{ selectedPlan.systemdInstallScript }}</pre></div>
               </div>
             </div>
-            <ul class="source-policy-instructions"><li v-for="instruction in selectedPlan.instructions" :key="instruction">{{ instruction }}</li></ul>
+            <ul v-if="selectedPlan.management === 'manual'" class="source-policy-instructions"><li v-for="instruction in selectedPlan.instructions" :key="instruction">{{ instruction }}</li></ul>
           </div>
-          <p v-else class="empty-cell">保存映射集后生成各节点的手工操作计划。</p>
+          <p v-else class="empty-cell">填写映射集后生成各节点的下发预览。</p>
         </section>
         <div class="dialog-actions split-actions"><button v-if="editing" class="text-danger-button" type="button" :disabled="pending" @click="remove">删除映射集</button><span></span><button class="secondary-button" type="button" :disabled="pending" @click="close">关闭</button><button class="primary-button" type="submit" :disabled="pending">{{ pending ? "正在预检并应用" : "预检、保存并下发 BIRD" }}</button></div>
       </template>
@@ -383,12 +396,12 @@ onBeforeUnmount(() => {
         <section class="source-policy-preview">
           <p class="form-error">BIRD 配置已删除。请先在以下节点完成系统规则清理，避免遗留无主 ip rule。</p>
           <div v-if="selectedPlan" class="source-policy-plan">
-            <div class="source-policy-plan-status"><strong>{{ selectedPlan.nodeName }}</strong><span>{{ selectedPlan.removeRules.length }} 条待清理规则</span></div>
+            <div class="source-policy-plan-status"><strong>{{ selectedPlan.nodeName }}</strong><span>{{ selectedPlan.removeManagedRules.length }} 条待清理规则</span></div>
             <template v-if="selectedPlan.platform === 'linux'">
               <div class="source-policy-code-grid"><div><div class="source-policy-code-head"><span>Linux 清理脚本</span><button class="compact-command" type="button" :disabled="!selectedPlan.cleanupScript" @click="copyScript">复制清理脚本</button></div><pre>{{ selectedPlan.cleanupScript || "无需要清理的规则" }}</pre></div></div>
               <div v-if="selectedPlan.systemdInstallScript" class="source-policy-systemd"><div class="source-policy-section-head"><div><h3>systemd 卸载</h3><small>停止并禁用服务，删除 helper 与 unit 后清理对应规则。</small></div></div><div class="source-policy-code-grid"><div><div class="source-policy-code-head"><span>systemd 卸载脚本</span><button class="compact-command" type="button" @click="copySystemdInstallScript">复制脚本</button></div><pre>{{ selectedPlan.systemdInstallScript }}</pre></div></div></div>
             </template>
-            <div v-else class="source-policy-openwrt"><div class="source-policy-code-head"><span>OpenWrt LuCI 待删除规则</span></div><ol><li v-for="rule in selectedPlan.removeRules" :key="`${rule.priority}:${rule.source}`"><code>Priority {{ rule.priority }}</code><code>from {{ rule.source }}</code><code>lookup {{ rule.table }}</code></li></ol></div>
+            <div v-else class="source-policy-openwrt"><div class="source-policy-code-head"><span>OpenWrt LuCI 待删除规则</span></div><ol><li v-for="rule in selectedPlan.removeManagedRules" :key="`${rule.kind}:${rule.priority}:${rule.source ?? rule.destination}`"><code>Priority {{ rule.priority }}</code><code v-if="rule.kind === 'gateway'">to {{ rule.destination }}</code><code v-else>from {{ rule.source }}</code><code>lookup {{ rule.table === 254 ? "main" : rule.table }}</code></li></ol></div>
           </div>
           <p v-else class="empty-cell">没有待清理规则。</p>
         </section>

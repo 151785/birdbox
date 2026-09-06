@@ -30,6 +30,7 @@ export const AGENT_PROTOCOL_VERSION = 1;
 export const AGENT_METHODS = new Set([
   "system.info",
   "system.interfaces",
+  "network.ip_rules",
   "bird.ospf",
   "bird.access",
   "bird.inspect",

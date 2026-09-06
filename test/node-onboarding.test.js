@@ -97,6 +97,7 @@ test("adds actionable global RPKI file requirements to node onboarding", async (
   });
   const response = await service.createSetupScript({
     name: "New router",
+    transport: "ssh",
     sshHost: "192.0.2.10",
     sshUser: "birdbox",
     routerId: "192.0.2.10",
@@ -111,7 +112,7 @@ test("adds actionable global RPKI file requirements to node onboarding", async (
   assert.equal(syntax.code, 0, syntax.stderr);
 });
 
-test("generates a one-shot Agent installer with valid shell syntax", async () => {
+test("defaults new onboarding to an Agent installer with valid shell syntax", async () => {
   const broker = new AgentBroker({ database: new MemoryDatabase() });
   await broker.initialize();
   const service = new NodeOnboardingService({
@@ -120,12 +121,14 @@ test("generates a one-shot Agent installer with valid shell syntax", async () =>
     makeId: () => "agent_test", addEvent: () => ({ timestamp: "", level: "info", message: "", nodeId: null }), getEvents: () => [],
     agentBroker: broker, agentControllerUrl: "https://controller.example",
   });
-  const response = await service.createSetupScript({ name: "Agent router", transport: "agent", routerId: "192.0.2.10" });
+  const response = await service.createSetupScript({ name: "Agent router", routerId: "192.0.2.10" });
   assert.equal(response.status, 200);
   assert.equal(response.payload.nodeId, "agent_test");
   assert.match(response.payload.script, /birdbox-agent/);
   assert.match(response.payload.script, /systemd|openwrt|init\.d/);
   assert.ok(response.payload.script.indexOf("CHECKSUM_URL") < response.payload.script.indexOf("mv -f \"$TMP\""));
+  assert.ok(response.payload.script.includes("EXPECTED=$(sed 's/[[:space:]]//g' < \"$CHECKSUM_TMP\")"));
+  assert.doesNotMatch(response.payload.script, /tr -d '\[:space:\]'/);
   const syntax = await shellSyntax(response.payload.script);
   assert.equal(syntax.code, 0, syntax.stderr);
 });
@@ -230,7 +233,7 @@ test("rejects onboarding before SSH when a global policy depends on scoped RPKI"
   });
 
   await assert.rejects(
-    () => service.test({ name: "New router", sshHost: "new.example", sshUser: "birdbox", routerId: "192.0.2.2" }),
+    () => service.test({ name: "New router", transport: "ssh", sshHost: "new.example", sshUser: "birdbox", routerId: "192.0.2.2" }),
     (error) => /作用域不兼容的 RPKI dn42_roa/.test(error.message)
       && /Function function_rpki -> RPKI dn42_roa/.test(error.message),
   );
