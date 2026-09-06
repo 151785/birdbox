@@ -4,11 +4,13 @@ import type { PolicyCollection } from "../../packages/contracts/src/inventory.js
 import type { MutationResult, MutationService } from "../application-contracts.js";
 import type { AuthStore } from "../auth.js";
 import { requestSessionToken, sessionCookie } from "./auth-routes.js";
+import type { AgentBroker } from "../agent-broker.js";
 
 interface MutationRoutesOptions {
   authStore: AuthStore;
   secureCookieSetting: boolean | null;
   service: MutationService;
+  agentBroker: AgentBroker;
 }
 
 interface RouteError extends Error {
@@ -62,10 +64,18 @@ export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (
   });
 
   app.post("/api/nodes/setup-script", async (request, reply) => jsonReply(reply, await options.service.createNodeSetupScript(jsonBody(request))));
+  app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/agent-upgrade-script", async (request, reply) => jsonReply(reply, await options.service.createNodeAgentUpgradeScript(validId(request.params.nodeId))));
+  app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/promote-agent", async (request, reply) => jsonReply(reply, await options.service.promoteNodeToAgent(validId(request.params.nodeId))));
   app.post("/api/nodes/test", async (request, reply) => jsonReply(reply, await options.service.testNode(jsonBody(request))));
   app.post("/api/nodes", async (request, reply) => jsonReply(reply, await options.service.createNode(jsonBody(request))));
   app.put<{ Params: { nodeId: string } }>("/api/nodes/:nodeId", async (request, reply) => jsonReply(reply, await options.service.updateNode(validId(request.params.nodeId), jsonBody(request))));
   app.delete<{ Params: { nodeId: string }; Querystring: { force?: string } }>("/api/nodes/:nodeId", async (request, reply) => jsonReply(reply, await options.service.deleteNode(validId(request.params.nodeId), request.query.force === "true")));
+  app.get("/api/agent/status", async (_request, reply) => reply.send({ agents: options.agentBroker.statuses() }));
+  app.post<{ Params: { nodeId: string } }>("/api/agent/nodes/:nodeId/upgrade", async (request, reply) => {
+    const body = jsonBody(request);
+    const result = await options.agentBroker.dispatch(validId(request.params.nodeId), "agent.self_upgrade", body, 10 * 60 * 1000);
+    return reply.code(result.ok ? 200 : 502).send(result);
+  });
 
   app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/peers", async (request, reply) => jsonReply(reply, await options.service.createPeer(validId(request.params.nodeId), jsonBody(request))));
   app.put<{ Params: { peerId: string } }>("/api/peers/:peerId", async (request, reply) => jsonReply(reply, await options.service.updatePeer(validId(request.params.peerId), jsonBody(request))));

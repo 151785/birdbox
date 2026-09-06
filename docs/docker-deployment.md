@@ -33,6 +33,7 @@ BIRDBOX_BIND_ADDRESS=127.0.0.1
 BIRDBOX_PORT=3000
 BIRDBOX_SECURE_COOKIE=true
 BIRDBOX_SHUTDOWN_TIMEOUT_MS=1800000
+BIRDBOX_PUBLIC_URL=https://birdbox.example.com
 ```
 
 `.env` 含有凭据，不要提交 Git 或公开分享。`BIRDBOX_SECURE_COOKIE=true` 只应
@@ -42,6 +43,7 @@ BIRDBOX_SHUTDOWN_TIMEOUT_MS=1800000
 
 `latest` 适合作为首次安装的默认值。生产环境验证完成后，建议将
 `BIRDBOX_IMAGE_TAG` 固定为具体版本 tag 或镜像 digest，使升级和回滚结果可重复。
+如果使用 Agent 主动连接节点，`BIRDBOX_PUBLIC_URL` 必须填写节点实际可达的主控 URL；不要填写监听地址 `0.0.0.0`。
 
 启动并检查服务：
 

@@ -197,6 +197,7 @@ export interface SourcePolicyMutationResponse extends ResourceMutationResponse<S
 
 export interface NodeMutationResponse {
   node: ManagedNode;
+  agentToken?: string;
   inventory: Inventory;
   deployment: DeploymentReport;
   events: ChangeEvent[];
@@ -213,6 +214,9 @@ export interface NodeSetupScriptResponse {
   script: string;
   includeLine: string;
   publicKey: string;
+  /** Returned only once for Agent onboarding; do not persist in inventory responses. */
+  agentToken?: string;
+  nodeId?: string;
   rpkiRequirements: NodeOnboardingRpkiRequirement[];
 }
 

@@ -23,6 +23,7 @@ import {
   ownedNodePolicyResources,
 } from "./inventory-domain.js";
 import type { InventoryStore } from "./store.js";
+import type { AgentBroker } from "./agent-broker.js";
 
 type ManagedSshNode = ManagedNode & {
   transport: "ssh";
@@ -32,6 +33,7 @@ type ManagedSshNode = ManagedNode & {
   sshIdentity: "managed";
   deploymentMode: "include";
 };
+type ManagedAgentNode = ManagedNode & { transport: "agent" };
 
 function removeNodeFromMultiScope<Resource extends { nodeIds: string[] | null }>(
   resources: readonly Resource[],
@@ -52,6 +54,8 @@ interface NodeOnboardingServiceOptions {
   makeId(prefix: string): string;
   addEvent(level: string, message: unknown, nodeId?: string | null): ChangeEvent;
   getEvents(): ChangeEvent[];
+  agentBroker?: AgentBroker;
+  agentControllerUrl?: string;
 }
 
 function normalizeSshNode(inputValue: unknown): ManagedNode {
@@ -60,8 +64,25 @@ function normalizeSshNode(inputValue: unknown): ManagedNode {
   return normalizeNode(input);
 }
 
-function normalizeOnboardingNode(inputValue: unknown, id = "node_onboarding"): ManagedSshNode {
+function normalizeAgentNode(inputValue: unknown, id = "node_onboarding"): ManagedAgentNode {
   const input = record(inputValue, "节点参数不能为空");
+  if (input.transport !== "agent") fail(400, "节点不是 Agent 管理方式");
+  const node = normalizeNode({
+    ...input,
+    id,
+    transport: "agent",
+    deploymentMode: input.deploymentMode ?? "include",
+    sshHost: null,
+    sshPort: null,
+    sshUser: null,
+    sshIdentity: "default",
+  });
+  return node as ManagedAgentNode;
+}
+
+function normalizeOnboardingNode(inputValue: unknown, id = "node_onboarding"): ManagedSshNode | ManagedAgentNode {
+  const input = record(inputValue, "节点参数不能为空");
+  if (input.transport === "agent") return normalizeAgentNode(input, id);
   const node = normalizeSshNode({
     ...input,
     id,
@@ -544,6 +565,41 @@ echo "Birdbox 节点准备完成：用户、SSH 公钥、Include 和 BIRD 配置
   };
 }
 
+function agentSetupScript(node: ManagedAgentNode, controllerUrl: string, token: string, rpkiRequirements: readonly NodeOnboardingRpkiRequirement[] = []): { includeLine: string; script: string } {
+  const baseUrl = controllerUrl.replace(/\/$/, "");
+  const env = `BIRDBOX_CONTROLLER_URL=${shellSingleQuote(controllerUrl)}\nBIRDBOX_NODE_ID=${shellSingleQuote(node.id)}\nBIRDBOX_AGENT_TOKEN=${shellSingleQuote(token)}`;
+  const includeLine = `include "${node.generatedConfigPath}";`;
+  const lines = [
+    "#!/bin/sh", "set -eu", "umask 077", `[ "$(id -u)" -eq 0 ] || { echo '请使用 root 身份执行此脚本' >&2; exit 1; }`, "mkdir -p /etc/birdbox",
+    "TMP=/usr/local/bin/birdbox-agent.tmp.$$", "AGENT_ARCH=$(uname -m)", "case \"$AGENT_ARCH\" in x86_64) AGENT_ARCH=amd64;; aarch64) AGENT_ARCH=arm64;; armv7l) AGENT_ARCH=arm;; mips) AGENT_ARCH=mips;; mipsel) AGENT_ARCH=mipsle;; mips64*) AGENT_ARCH=mips64;; riscv64) AGENT_ARCH=riscv64;; *) echo \"不支持的 Agent 架构：$AGENT_ARCH\" >&2; exit 1;; esac", `AGENT_URL=${shellSingleQuote(`${baseUrl}/api/agent/releases/latest/download`)}?arch=$AGENT_ARCH`, `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 "$AGENT_URL" -o "$TMP"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$TMP" "$AGENT_URL"; else echo '缺少 curl 或 wget' >&2; exit 1; fi`,
+    "chmod 0755 \"$TMP\"; mv -f \"$TMP\" /usr/local/bin/birdbox-agent", `MAIN_CONFIG=${shellSingleQuote(node.mainConfigPath)}`, `GENERATED_CONFIG=${shellSingleQuote(node.generatedConfigPath)}`, `test -f "$MAIN_CONFIG" || { echo "主配置不存在：$MAIN_CONFIG" >&2; exit 1; }`, `mkdir -p "$(dirname "$GENERATED_CONFIG")"`, `test -e "$GENERATED_CONFIG" || : > "$GENERATED_CONFIG"`, `grep -Fqx -- ${shellSingleQuote(includeLine)} "$MAIN_CONFIG" || printf '\\n%s\\n' ${shellSingleQuote(includeLine)} >> "$MAIN_CONFIG"`, "command -v birdc >/dev/null 2>&1 && birdc -s "+shellSingleQuote(node.socketPath)+" 'configure check' && birdc -s "+shellSingleQuote(node.socketPath)+" configure || true", "cat > /etc/birdbox/agent.env <<'BIRDBOX_AGENT_ENV'", env, "BIRDBOX_AGENT_ENV", "chmod 0600 /etc/birdbox/agent.env",
+    "if command -v systemctl >/dev/null 2>&1 && [ ! -r /etc/openwrt_release ]; then", "  cat > /etc/systemd/system/birdbox-agent.service <<'BIRDBOX_AGENT_UNIT'", "[Unit]", "Description=Birdbox Agent", "After=network-online.target", "[Service]", "EnvironmentFile=/etc/birdbox/agent.env", "ExecStart=/usr/local/bin/birdbox-agent", "Restart=always", "RestartSec=5", "User=root", "[Install]", "WantedBy=multi-user.target", "BIRDBOX_AGENT_UNIT", "  systemctl daemon-reload; systemctl enable --now birdbox-agent", "else",
+    "  cat > /etc/init.d/birdbox-agent <<'BIRDBOX_PROCD'", "#!/bin/sh /etc/rc.common", "START=95", "USE_PROCD=1", `start_service() { . /etc/birdbox/agent.env; procd_open_instance; procd_set_param command /usr/local/bin/birdbox-agent; procd_set_param env BIRDBOX_CONTROLLER_URL="$BIRDBOX_CONTROLLER_URL" BIRDBOX_NODE_ID="$BIRDBOX_NODE_ID" BIRDBOX_AGENT_TOKEN="$BIRDBOX_AGENT_TOKEN"; procd_set_param respawn; procd_close_instance; }`, "BIRDBOX_PROCD", "  chmod 0755 /etc/init.d/birdbox-agent; /etc/init.d/birdbox-agent enable; /etc/init.d/birdbox-agent restart", "fi", "echo 'Birdbox Agent 安装完成，等待主控注册'",
+  ];
+  const installIndex = lines.findIndex((line) => line.startsWith("chmod 0755"));
+  lines.splice(installIndex < 0 ? lines.length : installIndex, 0,
+    "CHECKSUM_TMP=$TMP.sha256",
+    `CHECKSUM_URL=${shellSingleQuote(`${baseUrl}/api/agent/releases/latest/checksum`)}?arch=$AGENT_ARCH`,
+    `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 "$CHECKSUM_URL" -o "$CHECKSUM_TMP"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$CHECKSUM_TMP" "$CHECKSUM_URL"; else echo '缺少 curl 或 wget，无法验证 Agent 下载' >&2; exit 1; fi`,
+    `EXPECTED=$(tr -d '[:space:]' < "$CHECKSUM_TMP")`,
+    `case "$EXPECTED" in [0-9a-fA-F]*) ;; *) echo 'Agent 校验摘要格式错误' >&2; exit 1;; esac`,
+    `if command -v sha256sum >/dev/null 2>&1; then ACTUAL=$(sha256sum "$TMP" | awk '{print $1}'); elif command -v openssl >/dev/null 2>&1; then ACTUAL=$(openssl dgst -sha256 "$TMP" | awk '{print $NF}'); else echo '缺少 sha256sum 或 openssl，无法验证 Agent 下载' >&2; exit 1; fi`,
+    `test "$(printf '%s' "$EXPECTED" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$ACTUAL" | tr '[:upper:]' '[:lower:]')" || { echo 'Agent 下载校验失败' >&2; exit 1; }`,
+  );
+  const rpkiIndex = lines.findIndex((line) => line.startsWith("mkdir -p \"$(dirname"));
+  if (rpkiRequirements.length && rpkiIndex >= 0) lines.splice(rpkiIndex, 0, ...rpkiRequirements.map((requirement) => `test -r ${shellSingleQuote(requirement.path)} || { echo ${shellSingleQuote(`全节点 RPKI 资源“${requirement.resourceLabel}”缺少 ${requirement.family.toUpperCase()} ROA 文件：${requirement.path}`)} >&2; exit 1; }`));
+  const ownershipIndex = lines.findIndex((line) => line.startsWith("test -e \"$GENERATED_CONFIG\""));
+  if (ownershipIndex >= 0) lines.splice(ownershipIndex + 1, 0,
+    `SOCKET_PATH=${shellSingleQuote(node.socketPath)}`,
+    `test -S "$SOCKET_PATH" || { echo "BIRD Socket 不存在：$SOCKET_PATH" >&2; exit 1; }`,
+    `BIRD_SOCKET_GID=$(if command -v stat >/dev/null 2>&1; then stat -c '%g' "$SOCKET_PATH"; else ls -ldn "$SOCKET_PATH" | awk '{print $4}'; fi)`,
+    `CONFIG_DIR=$(dirname "$GENERATED_CONFIG")`,
+    `case "$CONFIG_DIR" in /|/etc|/var|/usr|/run) ;; *) chgrp "$BIRD_SOCKET_GID" "$CONFIG_DIR" "$GENERATED_CONFIG" 2>/dev/null || true; chmod 0750 "$CONFIG_DIR";; esac`,
+    `chmod 0640 "$GENERATED_CONFIG"`,
+  );
+  return { includeLine, script: `${lines.join("\n")}\n` };
+}
+
 async function inspectOnboardingNode(node: ManagedSshNode): Promise<NodeRuntime> {
   const access = await checkIncludeNodeAccess(node);
   if (!access.ok) {
@@ -584,9 +640,18 @@ export class NodeOnboardingService {
   }
 
   async createSetupScript(body: Record<string, unknown>) {
-    const node = normalizeOnboardingNode(body);
+    const setupId = body.transport === "agent"
+      ? (typeof body.id === "string" && body.id ? body.id : this.#options.makeId("node"))
+      : undefined;
+    const node = normalizeOnboardingNode(body, setupId ?? "node_onboarding");
     const inventory = await this.#options.store.read();
     const rpkiRequirements = globalRpkiFileRequirements(inventory);
+    if (node.transport === "agent") {
+      if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
+      const token = await this.#options.agentBroker.issueToken(node.id);
+      const script = agentSetupScript(node, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+      return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
+    }
     return {
       status: 200,
       payload: {
@@ -597,8 +662,43 @@ export class NodeOnboardingService {
     };
   }
 
+  async createAgentUpgradeScript(nodeId: string) {
+    if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
+    const inventory = await this.#options.store.read();
+    const node = findNode(inventory, nodeId);
+    if (node.transport !== "ssh") fail(409, "只有旧 SSH 节点可以生成 Agent 升级脚本");
+    const agentNode = normalizeAgentNode({ ...node, transport: "agent", id: node.id });
+    const token = await this.#options.agentBroker.issueToken(node.id);
+    const rpkiRequirements = globalRpkiFileRequirements(inventory);
+    const script = agentSetupScript(agentNode, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+    return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
+  }
+
+  async promoteToAgent(nodeId: string) {
+    if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
+    const current = await this.#options.store.read();
+    const previous = findNode(current, nodeId);
+    if (previous.transport === "agent") return { status: 200, payload: { node: previous, inventory: current, deployment: { applied: false, nodeIds: [], nodes: [], sessions: [] }, events: this.#options.getEvents() } };
+    if (previous.transport !== "ssh") fail(409, "只有 SSH 节点可以切换到 Agent");
+    if (!this.#options.agentBroker.status(nodeId)?.connected) fail(409, "Agent 尚未注册，不能切换管理方式");
+    const candidate = normalizeAgentNode({ ...previous, transport: "agent", sshHost: null, sshPort: null, sshUser: null, sshIdentity: "default", deploymentMode: "include" }, nodeId);
+    const { state, deployment } = await this.#options.deploymentService.mutateAndApply((draft) => {
+      const index = draft.nodes.findIndex((item) => item.id === nodeId);
+      if (index < 0) fail(404, "受管节点不存在");
+      draft.nodes[index] = candidate;
+      return candidate;
+    }, () => [nodeId]);
+    this.#options.addEvent("success", `受管节点 ${candidate.name} 已切换为 Agent`, nodeId);
+    return { status: 200, payload: { node: candidate, inventory: state, deployment, events: this.#options.getEvents() } };
+  }
+
   async test(body: Record<string, unknown>) {
-    const node = normalizeOnboardingNode(body);
+    const node = normalizeOnboardingNode(body, typeof body.id === "string" ? body.id : "node_onboarding");
+    if (node.transport === "agent") {
+      const status = this.#options.agentBroker?.status(node.id);
+      if (!status?.connected) fail(422, "Agent 尚未连接主控，请先执行 Agent 安装脚本并等待注册");
+      return { status: 200, payload: { ok: true, node: { name: node.name, sshHost: null, sshPort: null, sshUser: null }, runtime: { version: status.agentVersion, bird2: true } } };
+    }
     const verification = await this.#options.withDeploymentLock(async () => {
       const current = await this.#options.store.read();
       const candidate = structuredClone(current);
@@ -621,7 +721,18 @@ export class NodeOnboardingService {
   }
 
   async create(body: Record<string, unknown>) {
-    const node = normalizeOnboardingNode(body, this.#options.makeId("node"));
+    const requestedId = body.transport === "agent" && typeof body.id === "string" ? body.id : this.#options.makeId("node");
+    const node = normalizeOnboardingNode(body, requestedId);
+    if (node.transport === "agent") {
+      const broker = this.#options.agentBroker;
+      if (!broker) fail(503, "Agent 通信服务尚未初始化");
+      const current = await this.#options.store.read();
+      if (current.nodes.some((item) => item.id === node.id)) fail(409, "受管节点 ID 已存在");
+      const agentToken = broker.hasCredential(node.id) ? undefined : await broker.issueToken(node.id);
+      const { state } = await this.#options.withDeploymentLock(() => this.#options.store.mutate((draft) => { draft.nodes.push(node); return node; }));
+      this.#options.addEvent("success", `已添加 Agent 受管节点 ${node.name}，等待 Agent 注册`, node.id);
+      return { status: 201, payload: { node, agentToken, inventory: state, deployment: { applied: false, nodeIds: [], nodes: [], sessions: [] }, events: this.#options.getEvents() } };
+    }
     const { state, deployment } = await this.#options.deploymentService.mutateAndApply(async (draft) => {
       await inspectOnboardingNode(node);
       draft.nodes.push(node);
@@ -665,6 +776,7 @@ export class NodeOnboardingService {
           });
           const state = await this.#options.store.replace(current, inventory);
           committed = true;
+          await this.#options.agentBroker?.revoke(targetNode.id);
           return { state, node: targetNode, forced: true };
         }
         if (
@@ -694,6 +806,7 @@ export class NodeOnboardingService {
         if (!result.ok) fail(500, result.stderr || result.stdout || "节点退役配置应用失败");
         const state = await this.#options.store.replace(current, inventory);
         committed = true;
+        await this.#options.agentBroker?.revoke(targetNode.id);
         await this.#options.deploymentService.clearJournal(journal);
         journal = null;
         return { state, node: targetNode, forced: false };

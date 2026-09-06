@@ -31,6 +31,7 @@ const onboardingStatus = ref("等待连接测试");
 const onboardingState = ref("");
 const setupScript = ref("");
 const includeLine = ref("");
+const onboardingAgentId = ref<string | null>(null);
 const cleanupNode = ref<ManagedNode | null>(null);
 const cleanupForced = ref(false);
 const systemPreset = ref<NodeSystemPreset>("linux");
@@ -54,6 +55,7 @@ const draft = reactive<NodeDraft>({
 
 const editing = computed(() => editingId.value !== null);
 const isSsh = computed(() => draft.transport === "ssh");
+const isAgent = computed(() => draft.transport === "agent");
 const saveDisabled = computed(() => pending.value || (!editing.value && !verified.value));
 const globalRpkiResources = computed(() => (
   dashboard.value?.inventory.rpki.filter((resource) => resource.enabled && resource.nodeIds === null) ?? []
@@ -98,6 +100,7 @@ function resetDraft(node: ManagedNode | null): void {
   onboardingState.value = node ? "ready" : "";
   setupScript.value = "";
   includeLine.value = "";
+  onboardingAgentId.value = node?.id ?? null;
   if (form.value) clearFormValidation(form.value);
 }
 
@@ -148,6 +151,7 @@ function close(): void {
 function onboardingPayload(): NodeMutationRequest {
   const value = toRaw(draft);
   return {
+    ...(isAgent.value && onboardingAgentId.value ? { id: onboardingAgentId.value } : {}),
     name: String(value.name),
     transport: value.transport,
     sshHost: isSsh.value ? String(value.sshHost || "") || null : null,
@@ -185,6 +189,7 @@ async function generateScript(): Promise<void> {
     });
     setupScript.value = result.script;
     includeLine.value = result.includeLine;
+    onboardingAgentId.value = result.nodeId ?? onboardingAgentId.value;
     onboardingStatus.value = "脚本已生成";
   } catch (error) {
     onboardingStatus.value = "生成失败";
@@ -195,10 +200,39 @@ async function generateScript(): Promise<void> {
   }
 }
 
+async function generateAgentUpgradeScript(): Promise<void> {
+  const nodeId = editingId.value;
+  if (!nodeId || !form.value) return;
+  pending.value = true;
+  onboardingStatus.value = "正在生成 Agent 升级脚本";
+  try {
+    const result = await api<NodeSetupScriptResponse>(`/api/nodes/${encodeURIComponent(nodeId)}/agent-upgrade-script`, { method: "POST" });
+    setupScript.value = result.script;
+    includeLine.value = "Agent 将复用现有 BIRD 配置路径";
+    onboardingStatus.value = "Agent 升级脚本已生成";
+  } catch (error) {
+    onboardingState.value = "error";
+    presentFormError(form.value, error, fieldMappings);
+  } finally { pending.value = false; }
+}
+
+async function promoteToAgent(): Promise<void> {
+  const nodeId = editingId.value;
+  if (!nodeId) return;
+  pending.value = true;
+  try {
+    const result = await api<NodeMutationResponse>(`/api/nodes/${encodeURIComponent(nodeId)}/promote-agent`, { method: "POST" });
+    await loadDashboard(result.node.id);
+    dialog.value?.close();
+    dispatchToast("节点已切换为 Agent 管理", "success");
+  } catch (error) { dispatchToast(error instanceof Error ? error.message : "切换 Agent 失败", "error"); }
+  finally { pending.value = false; }
+}
+
 async function testConnection(): Promise<void> {
   if (!form.value || !validateForm(form.value)) return;
   pending.value = true;
-  onboardingStatus.value = "正在检查 SSH、Include 与 BIRD";
+  onboardingStatus.value = isAgent.value ? "正在检查 Agent 注册与 BIRD" : "正在检查 SSH、Include 与 BIRD";
   onboardingState.value = "";
   try {
     const result = await api<NodeTestResponse>("/api/nodes/test", {
@@ -318,12 +352,13 @@ onBeforeUnmount(() => {
       <div class="dialog-head"><span class="dialog-icon">N</span><div><p class="eyebrow">资产</p><h2 id="nodeDialogTitle">{{ editing ? "编辑受管节点" : "添加受管节点" }}</h2></div></div>
       <div class="dialog-grid">
         <div class="field full-width"><label for="nodeEditorName">节点名称</label><input id="nodeEditorName" v-model.trim="draft.name" maxlength="80" required></div>
-        <div class="field"><span class="field-label">管理方式</span><div class="field-readonly">{{ isSsh ? "SSH" : "本机" }}</div></div>
+        <div class="field full-width"><span class="field-label">管理方式</span><div v-if="editing && draft.transport === 'local'" class="field-readonly">本机</div><div v-else class="segmented-control" role="radiogroup" aria-label="节点管理方式"><label><input v-model="draft.transport" type="radio" value="ssh" :disabled="editing"><span>SSH（主控连接）</span></label><label><input v-model="draft.transport" type="radio" value="agent" :disabled="editing"><span>Agent（节点主动连接）</span></label></div></div>
         <template v-if="isSsh">
           <div id="sshHostField" class="field"><label for="nodeEditorSshHost">SSH 连接地址</label><input id="nodeEditorSshHost" v-model.trim="draft.sshHost" placeholder="公网地址或可解析主机名" required><small v-if="editing">可修改为公网地址；已有会话和 IGP 地址不会被自动改写。</small></div>
           <div class="field"><label for="nodeEditorSshUser">SSH 用户</label><input id="nodeEditorSshUser" v-model.trim="draft.sshUser" placeholder="birdbox" required :disabled="editing"></div>
           <div class="field"><label for="nodeEditorSshPort">SSH 端口</label><input id="nodeEditorSshPort" v-model.number="draft.sshPort" type="number" min="1" max="65535" required><small v-if="editing">可修改为公网 SSH 服务端口。</small></div>
         </template>
+        <div v-if="isAgent" class="field full-width"><div class="node-rpki-warning"><strong>Agent 模式</strong><p>节点将主动连接主控，不需要公网 SSH 地址。请生成脚本，在目标节点以 root 执行并等待 Agent 注册后再测试连接。</p></div></div>
         <div class="field"><label for="nodeEditorRouterId">Router ID</label><input id="nodeEditorRouterId" v-model.trim="draft.routerId" required></div>
         <div class="field"><label for="nodeEditorIgpAddress">IGP 地址（BGP 建邻）</label><input id="nodeEditorIgpAddress" v-model.trim="draft.igpAddress" placeholder="例如 10.0.0.1 或 2001:db8::1"><small>新建 iBGP/eBGP 会话会使用此地址；留空时需要在会话中手动选择本地地址。</small></div>
         <div class="field"><label for="nodeEditorPort">默认会话端口</label><input id="nodeEditorPort" v-model.number="draft.listenPort" type="number" min="1" max="65535" required></div>
@@ -357,6 +392,12 @@ onBeforeUnmount(() => {
             <pre id="nodeSetupScript">{{ setupScript }}</pre>
             <div class="setup-include"><span>脚本将自动写入主配置</span><code id="nodeIncludeLine">{{ includeLine }}</code></div>
           </div>
+        </section>
+        <section v-if="editing && isSsh" id="nodeAgentUpgradePanel" class="node-onboarding full-width">
+          <div class="node-onboarding-head"><strong>升级为 Agent 管理</strong><span :class="onboardingState">{{ onboardingStatus }}</span></div>
+          <p class="dialog-note">先生成并在节点上执行升级脚本，确认 Agent 已连接后，再点击切换。旧 SSH 配置在切换前不会改变。</p>
+          <div class="node-onboarding-actions"><button class="secondary-button" type="button" :disabled="pending" @click="generateAgentUpgradeScript">生成升级脚本</button><button class="primary-button" type="button" :disabled="pending" @click="promoteToAgent">切换为 Agent</button></div>
+          <div v-if="setupScript" class="node-setup-guide"><div class="setup-guide-heading"><span>在目标节点以 root 身份执行</span><button class="compact-command" type="button" @click="copyScript">复制脚本</button></div><pre>{{ setupScript }}</pre></div>
         </section>
       </div>
       <div class="dialog-actions split-actions">

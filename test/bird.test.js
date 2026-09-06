@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   checkIncludeNodeAccess,
   configureManagedSsh,
+  configureAgentBroker,
   executeNodeCommand,
   locateStaticRouteDiagnostic,
   makeStaticProtocolName,
@@ -32,6 +33,8 @@ import {
   resourceChangeSessions,
   resourceNodeIds,
 } from "../src/resource-impact.js";
+import { AgentBroker } from "../src/agent-broker.js";
+import { MemoryDatabase } from "../src/database.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1178,6 +1181,20 @@ test("streams node command input without embedding it in the command", async () 
     { input: "sensitive-routing-config\n" },
   );
   assert.deepEqual(result, { ok: true, stdout: "received", stderr: "" });
+});
+
+test("executes a managed node command through the Agent RPC transport", async () => {
+  const broker = new AgentBroker({ database: new MemoryDatabase() });
+  await broker.initialize();
+  const token = await broker.issueToken("agent_exec");
+  await broker.register({ nodeId: "agent_exec", token, agentVersion: "test", protocolVersion: 1 });
+  configureAgentBroker(broker);
+  const agentNode = { ...node, id: "agent_exec", transport: "agent" };
+  const command = runOnNode(agentNode, "printf agent-ok");
+  const task = await broker.poll("agent_exec", token, 1000);
+  assert.equal(task?.method, "legacy.exec");
+  broker.result({ taskId: task.taskId, nodeId: "agent_exec", ok: true, stdout: "agent-ok", stderr: "" }, token);
+  assert.deepEqual(await command, { ok: true, stdout: "agent-ok", stderr: "" });
 });
 
 test("filters informational OpenSSH warnings without hiding a remote failure", async (context) => {

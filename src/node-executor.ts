@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { ManagedNode } from "../packages/contracts/src/inventory.js";
 import { assertValidation, normalizeNode } from "./bird-normalize-common.js";
+import type { AgentBroker } from "./agent-broker.js";
 
 /**
  * The maximum amount of shell source accepted by the legacy SSH transport.
@@ -44,6 +45,10 @@ const OPENSSH_INFORMATION_LINES = new Set([
 ]);
 
 let managedSshConfiguration: ManagedSshConfiguration = { identityFile: null, knownHostsFile: null };
+let agentBroker: AgentBroker | null = null;
+
+/** Install the controller-side broker used by nodes configured with transport=agent. */
+export function configureAgentBroker(broker: AgentBroker): void { agentBroker = broker; }
 
 function commandStderr(node: ManagedNode, value: unknown): string {
   const stderr = String(value ?? "").replace(/\r\n/g, "\n");
@@ -157,6 +162,21 @@ export async function executeNodeCommand(
   assertValidation(input?.kind === "managed-node", "命令只能在受管节点执行");
   const node = normalizeNode(nodeInput);
   const { timeout, maxBuffer } = validateExecutionOptions(command, options);
+  if (node.transport === "agent") {
+    assertValidation(agentBroker !== null, "Agent 通信服务尚未初始化");
+    const result = await agentBroker.dispatch(node.id, "legacy.exec", {
+      command,
+      input: options.input ?? null,
+      timeoutMs: timeout,
+      maxBuffer,
+    }, timeout + 10_000);
+    return {
+      ok: result.ok,
+      stdout: String(result.stdout ?? "").trim(),
+      stderr: String(result.stderr ?? "").trim(),
+      ...(result.code === undefined ? {} : { code: result.code }),
+    };
+  }
   try {
     const executable = node.transport === "local" ? "bash" : "ssh";
     const args = node.transport === "local"

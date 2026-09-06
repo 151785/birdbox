@@ -157,20 +157,22 @@ export function normalizeMultiNodeResourceScope(value: unknown, legacyValue: unk
 export function normalizeNode(inputValue: unknown): ManagedNode {
   const input = inputRecord(inputValue, "节点参数不能为空");
   const transport = input.transport ?? "ssh";
-  assertValidation(transport === "local" || transport === "ssh", "节点管理方式不合法");
+  assertValidation(transport === "local" || transport === "ssh" || transport === "agent", "节点管理方式不合法");
   const sshHost = transport === "ssh" ? String(input.sshHost ?? "").trim() : null;
   if (transport === "ssh") assertValidation(HOST_RE.test(sshHost as string) && !(sshHost as string).startsWith("-"), "SSH 目标不合法");
-  const deploymentMode = normalizeEnum(input.deploymentMode, DEPLOYMENT_MODES, "legacy", "节点部署模式");
-  const sshIdentity = normalizeEnum(input.sshIdentity, SSH_IDENTITY_MODES, deploymentMode === "include" ? "managed" : "default", "SSH 凭据模式");
+  const deploymentMode = normalizeEnum(input.deploymentMode, DEPLOYMENT_MODES, transport === "agent" ? "include" : "legacy", "节点部署模式");
+  const sshIdentity = normalizeEnum(input.sshIdentity, SSH_IDENTITY_MODES, deploymentMode === "include" && transport === "ssh" ? "managed" : "default", "SSH 凭据模式");
   const sshUser = transport === "ssh" && input.sshUser !== null && input.sshUser !== undefined && input.sshUser !== ""
     ? String(input.sshUser).trim()
     : null;
   if (sshUser !== null) assertValidation(SSH_USER_RE.test(sshUser), "SSH 用户名不合法");
   if (deploymentMode === "include") {
-    assertValidation(transport === "ssh", "Include 节点必须使用 SSH");
-    assertValidation(sshUser !== null, "Include 节点必须指定 SSH 用户");
-    assertValidation(!(sshHost as string).includes("@"), "Include 节点的主机与 SSH 用户必须分开填写");
-    assertValidation(sshIdentity === "managed", "Include 节点必须使用 Birdbox 托管密钥");
+    assertValidation(transport === "ssh" || transport === "agent", "Include 节点必须使用 SSH 或 Agent");
+    if (transport === "ssh") {
+      assertValidation(sshUser !== null, "Include 节点必须指定 SSH 用户");
+      assertValidation(!(sshHost as string).includes("@"), "Include 节点的主机与 SSH 用户必须分开填写");
+      assertValidation(sshIdentity === "managed", "Include 节点必须使用 Birdbox 托管密钥");
+    }
   }
   return {
     id: normalizeId(input.id, "节点 ID"),

@@ -303,6 +303,8 @@ export function createResourceApplicationService(
 
   return {
     createNodeSetupScript: (body) => options.nodeOnboarding.createSetupScript(body),
+    createNodeAgentUpgradeScript: (nodeId) => options.nodeOnboarding.createAgentUpgradeScript(nodeId),
+    promoteNodeToAgent: (nodeId) => options.nodeOnboarding.promoteToAgent(nodeId),
     testNode: (body) => options.nodeOnboarding.test(body),
     createNode: (body) => options.nodeOnboarding.create(body),
 

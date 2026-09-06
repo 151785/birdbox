@@ -8,6 +8,8 @@ import {
   onboardingValidationError,
 } from "../src/node-onboarding-service.js";
 import { validateInventory } from "../src/bird.js";
+import { AgentBroker } from "../src/agent-broker.js";
+import { MemoryDatabase } from "../src/database.js";
 
 const globalFileRpki = {
   id: "rpki_global_files",
@@ -107,6 +109,47 @@ test("adds actionable global RPKI file requirements to node onboarding", async (
   assert.ok(response.payload.script.indexOf("RPKI_MISSING=0") < response.payload.script.indexOf("test -f \"$MAIN_CONFIG\""));
   const syntax = await shellSyntax(response.payload.script);
   assert.equal(syntax.code, 0, syntax.stderr);
+});
+
+test("generates a one-shot Agent installer with valid shell syntax", async () => {
+  const broker = new AgentBroker({ database: new MemoryDatabase() });
+  await broker.initialize();
+  const service = new NodeOnboardingService({
+    store: { read: async () => inventoryWithRpki([]) }, deploymentService: {},
+    withDeploymentLock: async (operation) => operation(), controllerPublicKey: () => "",
+    makeId: () => "agent_test", addEvent: () => ({ timestamp: "", level: "info", message: "", nodeId: null }), getEvents: () => [],
+    agentBroker: broker, agentControllerUrl: "https://controller.example",
+  });
+  const response = await service.createSetupScript({ name: "Agent router", transport: "agent", routerId: "192.0.2.10" });
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.nodeId, "agent_test");
+  assert.match(response.payload.script, /birdbox-agent/);
+  assert.match(response.payload.script, /systemd|openwrt|init\.d/);
+  assert.ok(response.payload.script.indexOf("CHECKSUM_URL") < response.payload.script.indexOf("mv -f \"$TMP\""));
+  const syntax = await shellSyntax(response.payload.script);
+  assert.equal(syntax.code, 0, syntax.stderr);
+});
+
+test("creates an Agent node after registration without requiring inbound SSH", async () => {
+  const broker = new AgentBroker({ database: new MemoryDatabase() });
+  await broker.initialize();
+  let inventory = inventoryWithRpki([]);
+  const service = new NodeOnboardingService({
+    store: {
+      read: async () => inventory,
+      mutate: async (mutator) => { const draft = structuredClone(inventory); const result = await mutator(draft); inventory = validateInventory(draft); return { state: inventory, result }; },
+    }, deploymentService: {}, withDeploymentLock: async (operation) => operation(), controllerPublicKey: () => "",
+    makeId: () => "agent_created", addEvent: () => ({ timestamp: "", level: "info", message: "", nodeId: null }), getEvents: () => [], agentBroker: broker,
+  });
+  const payload = { name: "Created Agent", transport: "agent", routerId: "192.0.2.11", id: "agent_created" };
+  await service.createSetupScript(payload);
+  const token = (await service.createSetupScript(payload)).payload.agentToken;
+  await broker.register({ nodeId: "agent_created", token, agentVersion: "test", protocolVersion: 1 });
+  const tested = await service.test(payload);
+  assert.equal(tested.payload.ok, true);
+  const created = await service.create(payload);
+  assert.equal(created.payload.node.transport, "agent");
+  assert.equal(created.payload.deployment.applied, false);
 });
 
 test("maps a missing global RPKI file validation error to its resource and remedy", () => {

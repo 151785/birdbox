@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { AuthStore } from "./auth.js";
+import { AgentBroker } from "./agent-broker.js";
 import { renderBirdConfig } from "./bird.js";
 import { ChangeEventLog } from "./change-event-log.js";
 import { ControllerSshIdentity } from "./controller-ssh.js";
@@ -17,6 +18,7 @@ import { createResourceApplicationService } from "./resource-application-service
 import { SessionApplicationService } from "./session-application-service.js";
 import { resolveApplicationRoot } from "./application-root.js";
 import { InventoryStore } from "./store.js";
+import { configureAgentBroker } from "./node-executor.js";
 
 function normalizeListenHost(value: unknown): string {
   const normalized = String(value ?? "").trim();
@@ -63,6 +65,7 @@ const dataDirectory = process.env.BIRDBOX_DATA_DIR ?? path.join(rootDirectory, "
 const nodesPath = process.env.BIRDBOX_NODES_FILE ?? path.join(rootDirectory, "config", "nodes.json");
 const host = normalizeListenHost(process.env.BIRDBOX_HOST ?? "0.0.0.0");
 const port = normalizeListenPort(process.env.BIRDBOX_PORT ?? 3000);
+const publicUrl = String(process.env.BIRDBOX_PUBLIC_URL ?? `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`).replace(/\/$/, "");
 const secureCookieSetting = normalizeEnvironmentBoolean(
   process.env.BIRDBOX_SECURE_COOKIE,
   "BIRDBOX_SECURE_COOKIE",
@@ -120,6 +123,7 @@ const addEvent = eventLog.add.bind(eventLog);
 const getEvents = eventLog.list.bind(eventLog);
 const makeId = (prefix: string): string =>
   `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+const agentBroker = new AgentBroker({ database, makeId, onEvent: addEvent });
 
 deploymentService = new DeploymentService({
   database,
@@ -147,6 +151,8 @@ const nodeOnboarding = new NodeOnboardingService({
   makeId,
   addEvent,
   getEvents,
+  agentBroker,
+  agentControllerUrl: publicUrl,
 });
 const sessions = new SessionApplicationService({
   store,
@@ -172,6 +178,8 @@ let activeIrrSchedule: Promise<void> | null = null;
 await database.initialize();
 await authStore.initialize();
 await store.initialize();
+await agentBroker.initialize();
+configureAgentBroker(agentBroker);
 await deploymentService.initialize();
 
 const pendingDeployment = (await deploymentService.readJournal()).active;
@@ -194,6 +202,8 @@ const app = await createHttpApplication({
   mutationService,
   addEvent,
   getEvents,
+  agentBroker,
+  agentBinaryPath: process.env.BIRDBOX_AGENT_BINARY_PATH ?? (process.env.NODE_ENV === "production" ? "/usr/local/lib/birdbox-agent" : path.join(rootDirectory, "agent", "bin", "birdbox-agent")),
 });
 
 await app.listen({ port, host });

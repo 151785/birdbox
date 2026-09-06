@@ -9,6 +9,8 @@ import type { AuthStore } from "../auth.js";
 import { fail, isPublicError, safeErrorMessage, type PublicError } from "../errors.js";
 import type { InventoryStore } from "../store.js";
 import { authRoutes } from "./auth-routes.js";
+import type { AgentBroker } from "../agent-broker.js";
+import { agentRoutes } from "./agent-routes.js";
 import { dashboardRoutes } from "./dashboard-routes.js";
 import { mutationRoutes } from "./mutation-routes.js";
 import { sessionRuntimeRoutes } from "./session-runtime-routes.js";
@@ -26,6 +28,8 @@ interface HttpApplicationOptions {
   mutationService: MutationService;
   addEvent(level: string, message: unknown, nodeId?: string | null): ChangeEvent;
   getEvents(): ChangeEvent[];
+  agentBroker: AgentBroker;
+  agentBinaryPath?: string;
 }
 
 const SECURITY_HEADERS = Object.freeze({
@@ -165,6 +169,7 @@ export async function createHttpApplication(options: HttpApplicationOptions) {
     authStore: options.authStore,
     secureCookieSetting: options.secureCookieSetting,
   });
+  await app.register(agentRoutes, { broker: options.agentBroker, binaryPath: options.agentBinaryPath });
   await app.register(dashboardRoutes, {
     authStore: options.authStore,
     secureCookieSetting: options.secureCookieSetting,
@@ -184,6 +189,7 @@ export async function createHttpApplication(options: HttpApplicationOptions) {
     authStore: options.authStore,
     secureCookieSetting: options.secureCookieSetting,
     service: options.mutationService,
+    agentBroker: options.agentBroker,
   });
 
   return app;

@@ -23,6 +23,7 @@ import {
 } from "./node-executor.js";
 
 export { configureManagedSsh, executeNodeCommand } from "./node-executor.js";
+export { configureAgentBroker } from "./node-executor.js";
 export type { NodeCommandResult, NodeExecutorOptions } from "./node-executor.js";
 
 interface RouteInspectionOptions {

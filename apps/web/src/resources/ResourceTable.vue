@@ -106,7 +106,7 @@ function sourcePolicySources(resource: SourcePolicyEgress): number {
     <tr v-if="!inventory?.nodes.length"><td colspan="5" class="empty-cell">尚无受管节点</td></tr>
     <tr v-for="node in inventory?.nodes ?? []" v-else :key="node.id">
       <td><strong>{{ node.name }}</strong><small>{{ node.id }}</small></td>
-      <td>{{ node.transport === "ssh" ? "SSH" : "本机" }} · {{ node.sshUser ? `${node.sshUser}@${node.sshHost}:${node.sshPort}` : (node.sshHost ?? "-") }}</td>
+      <td>{{ node.transport === "ssh" ? "SSH" : node.transport === "agent" ? "Agent" : "本机" }} · {{ node.transport === "agent" ? "节点主动连接" : (node.sshUser ? `${node.sshUser}@${node.sshHost}:${node.sshPort}` : (node.sshHost ?? "-")) }}</td>
       <td><code>{{ node.routerId }}</code><small v-if="node.igpAddress">IGP {{ node.igpAddress }}</small></td>
       <td>{{ node.listenPort }}</td>
       <td><button class="row-edit-button" type="button" title="编辑节点" :aria-label="`编辑节点 ${node.name}`" @click="edit('nodes', node.id)">✎</button></td>

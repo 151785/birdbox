@@ -8,7 +8,8 @@ export interface ManagedNode {
   id: string;
   kind: "managed-node";
   name: string;
-  transport: "local" | "ssh";
+  /** How the controller reaches the node. Agent connections are outbound from the node. */
+  transport: "local" | "ssh" | "agent";
   /** SSH management endpoint; independent from the BGP/IGP transport address. */
   sshHost: string | null;
   sshPort: number | null;

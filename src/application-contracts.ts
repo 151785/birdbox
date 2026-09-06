@@ -7,6 +7,8 @@ export interface MutationResult {
 
 export interface MutationService {
   createNodeSetupScript(body: Record<string, unknown>): Promise<MutationResult>;
+  createNodeAgentUpgradeScript(nodeId: string): Promise<MutationResult>;
+  promoteNodeToAgent(nodeId: string): Promise<MutationResult>;
   testNode(body: Record<string, unknown>): Promise<MutationResult>;
   createNode(body: Record<string, unknown>): Promise<MutationResult>;
   updateNode(nodeId: string, body: Record<string, unknown>): Promise<MutationResult>;

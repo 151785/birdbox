@@ -11,6 +11,17 @@ COPY public ./public
 COPY src ./src
 RUN npm run build
 
+FROM golang:1.24-alpine AS agent-build
+ARG BIRDBOX_VERSION=dev
+WORKDIR /src/agent
+COPY agent/go.mod ./
+COPY agent/*.go ./
+RUN mkdir -p /out \
+    && for target in amd64 arm64 mips mipsle mips64 riscv64; do \
+      GOOS=linux GOARCH="$target" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${BIRDBOX_VERSION}" -o "/out/birdbox-agent-$target" .; \
+    done \
+    && GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${BIRDBOX_VERSION}" -o /out/birdbox-agent-arm .
+
 FROM node:24-alpine AS bgpq4-build
 
 ARG BGPQ4_VERSION=1.12
@@ -57,6 +68,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=web-build /app/dist ./dist
 COPY --from=web-build /app/public ./public
+COPY --from=agent-build /out /usr/local/lib/birdbox-agent
 COPY README.md ./README.md
 
 RUN chown -R birdbox:birdbox /app /var/lib/birdbox
