@@ -7,6 +7,8 @@ import type {
   PolicyCollection,
   SourcePolicyEgress,
   OspfDomain,
+  DirectProtocol,
+  KernelProtocol,
 } from "../packages/contracts/src/inventory.js";
 import { resourceAppliesToNode } from "../packages/contracts/src/resource-scope.js";
 import { resourceSingleNodeId } from "../packages/contracts/src/resource-scope.js";
@@ -28,6 +30,7 @@ import {
   validateInventory,
   executeNodeRpc,
 } from "./bird.js";
+import { normalizeDirectProtocol, normalizeKernelProtocol } from "./bird-system-protocols.js";
 import { normalizeSession } from "./bird-session.js";
 import type { DeploymentService } from "./deployment-service.js";
 import { fail } from "./errors.js";
@@ -427,6 +430,89 @@ export function createResourceApplicationService(
         events,
       },
     };
+  },
+
+  async createDirect(body) {
+    const resource = normalizeDirectProtocol({ ...body, id: makeId("direct") });
+    const { state, deployment } = await mutateAndApply((draft) => {
+      findNode(draft, resource.nodeId);
+      draft.directProtocols.push(resource);
+      validateInventory(draft);
+      return resource;
+    }, () => [resource.nodeId]);
+    event("success", `已添加 Direct 资源 ${resource.label}`, resource.nodeId);
+    return { status: 201, payload: { resource, inventory: state, deployment, events } };
+  },
+
+  async updateDirect(resourceId, body) {
+    let affectedNodeIds: string[] = [];
+    const { state, result: resource, deployment } = await mutateAndApply((draft) => {
+      const index = draft.directProtocols.findIndex((item) => item.id === resourceId);
+      if (index < 0) fail(404, "Direct 资源不存在");
+      const previous = draft.directProtocols[index]!;
+      const updated = normalizeDirectProtocol({ ...previous, ...body, id: resourceId });
+      affectedNodeIds = uniqueNodeIds([previous.nodeId, updated.nodeId]);
+      draft.directProtocols[index] = updated;
+      validateInventory(draft);
+      return updated;
+    }, () => affectedNodeIds);
+    event("success", `已更新 Direct 资源 ${resource.label}`, resource.nodeId);
+    return { status: 200, payload: { resource, inventory: state, deployment, events } };
+  },
+
+  async deleteDirect(resourceId) {
+    const { state, result: resource, deployment } = await mutateAndApply((draft) => {
+      const index = draft.directProtocols.findIndex((item) => item.id === resourceId);
+      if (index < 0) fail(404, "Direct 资源不存在");
+      const target = draft.directProtocols[index]!;
+      draft.directProtocols.splice(index, 1);
+      return target;
+    }, (target) => [target.nodeId]);
+    event("success", `已删除 Direct 资源 ${resource.label}`, resource.nodeId);
+    return { status: 200, payload: { inventory: state, deployment, events } };
+  },
+
+  async createKernel(body) {
+    const resource = normalizeKernelProtocol({ ...body, id: makeId("kernel") });
+    const { state, deployment } = await mutateAndApply((draft) => {
+      for (const nodeId of resource.nodeIds ?? draft.nodes.map((node) => node.id)) findNode(draft, nodeId);
+      draft.kernelProtocols.push(resource);
+      validateInventory(draft);
+      return resource;
+    }, (_result, inventory) => resource.nodeIds ?? inventory.nodes.map((node) => node.id));
+    event("success", `已添加 Kernel 资源 ${resource.label}`);
+    return { status: 201, payload: { resource, inventory: state, deployment, events } };
+  },
+
+  async updateKernel(resourceId, body) {
+    let affected: string[] = [];
+    const { state, result: resource, deployment } = await mutateAndApply((draft) => {
+      const index = draft.kernelProtocols.findIndex((item) => item.id === resourceId);
+      if (index < 0) fail(404, "Kernel 资源不存在");
+      const previous = draft.kernelProtocols[index]!;
+      const updated = normalizeKernelProtocol({ ...previous, ...body, id: resourceId });
+      for (const nodeId of updated.nodeIds ?? draft.nodes.map((node) => node.id)) findNode(draft, nodeId);
+      draft.kernelProtocols[index] = updated;
+      affected = uniqueNodeIds([...(previous.nodeIds ?? draft.nodes.map((node) => node.id)), ...(updated.nodeIds ?? draft.nodes.map((node) => node.id))]);
+      validateInventory(draft);
+      return updated;
+    }, () => affected);
+    event("success", `已更新 Kernel 资源 ${resource.label}`);
+    return { status: 200, payload: { resource, inventory: state, deployment, events } };
+  },
+
+  async deleteKernel(resourceId) {
+    let affected: string[] = [];
+    const { state, result: resource, deployment } = await mutateAndApply((draft) => {
+      const index = draft.kernelProtocols.findIndex((item) => item.id === resourceId);
+      if (index < 0) fail(404, "Kernel 资源不存在");
+      const target = draft.kernelProtocols[index]!;
+      affected = target.nodeIds ?? draft.nodes.map((node) => node.id);
+      draft.kernelProtocols.splice(index, 1);
+      return target;
+    }, () => affected);
+    event("success", `已删除 Kernel 资源 ${resource.label}`);
+    return { status: 200, payload: { inventory: state, deployment, events } };
   },
 
   async createPeer(nodeId, body) {

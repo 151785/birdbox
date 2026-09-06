@@ -11,12 +11,16 @@ import type {
   RpkiSource,
   SourcePolicyEgress,
   StaticProtocol,
+  DirectProtocol,
+  KernelProtocol,
 } from "./inventory.js";
 
 export type SessionMutationRequest = Omit<BgpSession, "id" | "managedBy">;
 export type NodeMutationRequest = Omit<ManagedNode, "id" | "kind">;
 export type PeerMutationRequest = Omit<Peer, "id" | "nodeId" | "managedBy">;
 export type StaticMutationRequest = Omit<StaticProtocol, "id">;
+export type DirectMutationRequest = Omit<DirectProtocol, "id">;
+export type KernelMutationRequest = Omit<KernelProtocol, "id">;
 export type RpkiMutationRequest = Omit<RpkiSource, "id">;
 export type SourcePolicyMutationRequest = Omit<SourcePolicyEgress, "id" | "rulePriorityBase">;
 
@@ -105,6 +109,8 @@ export interface DashboardResponse {
   filters: PolicyFilter[];
   rpki: RpkiSource[];
   staticProtocols: StaticProtocol[];
+  directProtocols: DirectProtocol[];
+  kernelProtocols: KernelProtocol[];
   sourcePolicies: SourcePolicyEgress[];
   selectedPeer: DashboardPeer | null;
   runtime: NodeRuntime;
@@ -140,6 +146,8 @@ export interface SessionPreviewResponse {
   valid: boolean;
   session: BgpSession;
   config: string;
+  /** Only the BGP block represented by the submitted draft. */
+  sessionConfig: string;
   validation: NodeCommandResponse;
   events: ChangeEvent[];
 }
@@ -150,6 +158,8 @@ export interface SessionApplyResponse {
   established: boolean;
   session: BgpSession;
   config: string;
+  /** Only the BGP block represented by the applied session. */
+  sessionConfig: string;
   status: unknown;
   events: ChangeEvent[];
 }

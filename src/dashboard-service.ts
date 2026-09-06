@@ -7,6 +7,7 @@ import type {
   ProtocolRuntime,
 } from "../packages/contracts/src/api.js";
 import type { Inventory, ManagedNode, Peer } from "../packages/contracts/src/inventory.js";
+import { resourceAppliesToNode } from "../packages/contracts/src/resource-scope.js";
 import { inspectNode } from "./bird.js";
 import {
   configForNode,
@@ -127,6 +128,8 @@ export class DashboardService {
         filters: [],
         rpki: [],
         staticProtocols: [],
+        directProtocols: [],
+        kernelProtocols: [],
         sourcePolicies: [],
         selectedPeer: null,
         runtime: {
@@ -176,6 +179,8 @@ export class DashboardService {
       filters: nodePolicyResources(state, "filters", selectedNode.id, true),
       rpki: nodeRPKIResources(state, selectedNode.id, true),
       staticProtocols: nodeStaticProtocols(state, selectedNode.id, true),
+      directProtocols: state.directProtocols.filter((item) => item.nodeId === selectedNode.id && item.enabled),
+      kernelProtocols: state.kernelProtocols.filter((item) => resourceAppliesToNode(item, selectedNode.id) && item.enabled),
       sourcePolicies: nodeSourcePolicies(state, selectedNode.id, true),
       selectedPeer: selected,
       runtime,

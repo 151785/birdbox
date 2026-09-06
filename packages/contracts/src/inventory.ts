@@ -4,6 +4,29 @@ export type ResourceScope = string | null;
 export type MultiNodeResourceScope = string[] | null;
 export type BgpSessionType = "ebgp" | "ibgp";
 
+/** Node-level BIRD protocol integration. Kept separate from BGP session options. */
+export interface DirectProtocolOptions {
+  enabled: boolean;
+  name: string;
+  ipv4: boolean;
+  ipv6: boolean;
+  /** BIRD interface patterns. An empty list means all interfaces. */
+  interfaces: string[];
+}
+
+export interface KernelProtocolOptions {
+  enabled: boolean;
+  name: string;
+  ipv4: boolean;
+  ipv6: boolean;
+  import: "all" | "none";
+  export: "all" | "none";
+  /** Linux kernel routing table; null uses the system main table. */
+  table: number | null;
+  scanTime: number | null;
+  persist: boolean;
+}
+
 export interface ManagedNode {
   id: string;
   kind: "managed-node";
@@ -23,6 +46,8 @@ export interface ManagedNode {
   /** Transport address used when Birdbox creates new BGP adjacencies. */
   igpAddress: string | null;
   listenPort: number;
+  directProtocol: DirectProtocolOptions;
+  kernelProtocol: KernelProtocolOptions;
 }
 
 export interface TopologyPosition {
@@ -121,6 +146,32 @@ export interface StaticProtocol {
   import: "all" | "none";
   export: "all" | "none";
   raw: string;
+  enabled: boolean;
+}
+
+export interface DirectProtocol {
+  id: string;
+  label: string;
+  name: string;
+  nodeId: string;
+  interfaces: string[];
+  ipv4: boolean;
+  ipv6: boolean;
+  enabled: boolean;
+}
+
+export interface KernelProtocol {
+  id: string;
+  label: string;
+  name: string;
+  nodeIds: MultiNodeResourceScope;
+  ipv4: boolean;
+  ipv6: boolean;
+  importPolicy: ChannelPolicy;
+  exportPolicy: ChannelPolicy;
+  table: number | null;
+  scanTime: number | null;
+  persist: boolean;
   enabled: boolean;
 }
 
@@ -484,6 +535,8 @@ export interface Inventory {
   filters: PolicyFilter[];
   rpki: RpkiSource[];
   staticProtocols: StaticProtocol[];
+  directProtocols: DirectProtocol[];
+  kernelProtocols: KernelProtocol[];
   sourcePolicies: SourcePolicyEgress[];
   sessions: BgpSession[];
   ibgpDomains: IbgpDomain[];

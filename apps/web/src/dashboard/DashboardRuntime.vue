@@ -6,13 +6,24 @@ import type { ChangeEvent, DashboardPeer } from "@birdbox/contracts/api";
 
 import { useDashboardStore } from "./dashboard-store";
 import { protocolPresentation } from "./presentation";
+import { useSessionStore } from "../sessions/session-store";
+import { extractBgpProtocolConfig } from "../sessions/session-config";
 
 type RuntimeTab = "config" | "events";
 
 const { dashboard } = useDashboardStore();
+const { previewConfig, previewContext, contextKey } = useSessionStore();
 const activeTab = ref<RuntimeTab>("config");
 const peers = computed(() => dashboard.value?.peers ?? []);
 const events = computed(() => [...(dashboard.value?.events ?? [])].reverse());
+const selectedSessionConfig = computed(() => {
+  if (!dashboard.value) return "# 尚无配置";
+  if (previewConfig.value && previewContext.value === contextKey.value) return previewConfig.value;
+  const session = dashboard.value.selectedPeer?.session;
+  if (!session) return "# 当前 eBGP 会话尚未配置";
+  return extractBgpProtocolConfig(dashboard.value.config, session.protocolName)
+    ?? "# 当前 eBGP 配置暂不可用";
+});
 
 function enabledFamilies(peer: DashboardPeer): AddressFamily[] {
   return (["ipv4", "ipv6"] as const).filter((family) => peer.session?.channels[family]?.enabled);
@@ -120,11 +131,11 @@ function eventTime(event: ChangeEvent): string {
     </table>
   </div>
   <div class="tabs" role="tablist" aria-label="配置与日志">
-    <button id="localConfigTab" class="tab" :class="{ active: activeTab === 'config' }" type="button" role="tab" :aria-selected="activeTab === 'config'" aria-controls="localConfig" :tabindex="activeTab === 'config' ? 0 : -1" @click="selectTab('config')" @keydown="moveTabFocus($event, 'config')">节点配置</button>
+    <button id="localConfigTab" class="tab" :class="{ active: activeTab === 'config' }" type="button" role="tab" :aria-selected="activeTab === 'config'" aria-controls="localConfig" :tabindex="activeTab === 'config' ? 0 : -1" @click="selectTab('config')" @keydown="moveTabFocus($event, 'config')">当前 eBGP 配置</button>
     <button id="eventLogTab" class="tab" :class="{ active: activeTab === 'events' }" type="button" role="tab" :aria-selected="activeTab === 'events'" aria-controls="eventLog" :tabindex="activeTab === 'events' ? 0 : -1" @click="selectTab('events')" @keydown="moveTabFocus($event, 'events')">变更日志 <span>{{ dashboard?.events.length ?? 0 }}</span></button>
   </div>
   <div class="tab-panels">
-    <pre id="localConfig" class="tab-panel" :class="{ active: activeTab === 'config' }" role="tabpanel" aria-labelledby="localConfigTab">{{ dashboard?.config ?? "# 尚无配置" }}</pre>
+    <pre id="localConfig" class="tab-panel" :class="{ active: activeTab === 'config' }" role="tabpanel" aria-labelledby="localConfigTab">{{ selectedSessionConfig }}</pre>
     <div id="eventLog" class="tab-panel event-log" :class="{ active: activeTab === 'events' }" role="tabpanel" aria-labelledby="eventLogTab">
       <div v-if="events.length === 0" class="empty-cell">尚无变更日志</div>
       <div v-for="entry in events" v-else :key="`${entry.timestamp}:${entry.nodeId}:${entry.message}`" class="log-row" :class="entry.level">

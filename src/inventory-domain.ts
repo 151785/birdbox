@@ -10,6 +10,8 @@ import type {
   RpkiSource,
   SourcePolicyEgress,
   StaticProtocol,
+  DirectProtocol,
+  KernelProtocol,
 } from "../packages/contracts/src/inventory.js";
 import {
   resourceAppliesToNode,
@@ -104,7 +106,7 @@ export function nodeSourcePolicies(state: Inventory, nodeId: string, enabledOnly
 export function ownedNodePolicyResources(
   state: Inventory,
   nodeId: string,
-): Array<PolicyResource | RpkiSource | SourcePolicyEgress | StaticProtocol> {
+): Array<PolicyResource | RpkiSource | SourcePolicyEgress | StaticProtocol | DirectProtocol | KernelProtocol> {
   return [
     ...state.defines.filter((item) => resourceExplicitlyScopesNode(item, nodeId)),
     ...state.functions.filter((item) => resourceExplicitlyScopesNode(item, nodeId)),
@@ -112,6 +114,8 @@ export function ownedNodePolicyResources(
     ...state.rpki.filter((item) => resourceExplicitlyScopesNode(item, nodeId)),
     ...state.sourcePolicies.filter((item) => resourceExplicitlyScopesNode(item, nodeId)),
     ...state.staticProtocols.filter((item) => item.nodeId === nodeId),
+    ...state.directProtocols.filter((item) => item.nodeId === nodeId),
+    ...state.kernelProtocols.filter((item) => resourceExplicitlyScopesNode(item, nodeId)),
   ];
 }
 
@@ -136,11 +140,13 @@ export function configForNode(state: Inventory, node: ManagedNode): string {
     nodeSessions(state, node.id),
     nodePolicyResources(state, "functions", node.id),
     nodePolicyResources(state, "filters", node.id),
-    nodePolicyResources(state, "defines", node.id),
-    nodeRPKIResources(state, node.id),
-    nodeStaticProtocols(state, node.id),
-    nodeSourcePolicies(state, node.id),
-    state.ospfDomains,
+  nodePolicyResources(state, "defines", node.id),
+  nodeRPKIResources(state, node.id),
+  nodeStaticProtocols(state, node.id),
+  nodeSourcePolicies(state, node.id),
+  state.ospfDomains,
+    state.directProtocols.filter((item) => item.nodeId === node.id),
+    state.kernelProtocols.filter((item) => resourceAppliesToNode(item, node.id)),
   );
 }
 
@@ -151,11 +157,13 @@ export function configBundleForNode(state: Inventory, node: ManagedNode) {
     nodeSessions(state, node.id),
     nodePolicyResources(state, "functions", node.id),
     nodePolicyResources(state, "filters", node.id),
-    nodePolicyResources(state, "defines", node.id),
-    nodeRPKIResources(state, node.id),
-    nodeStaticProtocols(state, node.id),
-    nodeSourcePolicies(state, node.id),
-    state.ospfDomains,
+  nodePolicyResources(state, "defines", node.id),
+  nodeRPKIResources(state, node.id),
+  nodeStaticProtocols(state, node.id),
+  nodeSourcePolicies(state, node.id),
+  state.ospfDomains,
+    state.directProtocols.filter((item) => item.nodeId === node.id),
+    state.kernelProtocols.filter((item) => resourceAppliesToNode(item, node.id)),
   );
 }
 

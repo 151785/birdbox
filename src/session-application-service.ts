@@ -19,6 +19,7 @@ import { fail, optionalRecord, record, safeErrorMessage, type UnknownRecord } fr
 import { configForNode, findNode, findPeer, findPolicyResource } from "./inventory-domain.js";
 import type { InventoryStore } from "./store.js";
 import { errorContext, logger } from "./logger.js";
+import { extractBgpProtocolConfig } from "../packages/contracts/src/config-snippet.js";
 
 interface PreparedSession {
   inventory: Inventory;
@@ -64,6 +65,7 @@ export class SessionApplicationService {
           valid: staged.valid,
           session: staged.session,
           config: staged.config,
+          sessionConfig: extractBgpProtocolConfig(staged.config, staged.session.protocolName) ?? "",
           validation: staged.validation,
           events: this.#options.getEvents(),
         },
@@ -90,6 +92,7 @@ export class SessionApplicationService {
             payload: {
               error: "配置预检失败",
               ...staged,
+              sessionConfig: extractBgpProtocolConfig(staged.config, staged.session.protocolName) ?? "",
               events: this.#options.getEvents(),
             },
           };
@@ -117,6 +120,7 @@ export class SessionApplicationService {
               established: false,
               session: staged.session,
               config: staged.config,
+              sessionConfig: extractBgpProtocolConfig(staged.config, staged.session.protocolName) ?? "",
               status: null,
               events: this.#options.getEvents(),
             },
@@ -132,6 +136,7 @@ export class SessionApplicationService {
             established: false,
             session: staged.session,
             config: staged.config,
+            sessionConfig: extractBgpProtocolConfig(staged.config, staged.session.protocolName) ?? "",
             status: null,
             events: this.#options.getEvents(),
           },

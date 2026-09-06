@@ -103,6 +103,12 @@ export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (
   app.post("/api/statics", async (request, reply) => jsonReply(reply, await options.service.createStatic(jsonBody(request))));
   app.put<{ Params: { resourceId: string } }>("/api/statics/:resourceId", async (request, reply) => jsonReply(reply, await options.service.updateStatic(validId(request.params.resourceId), jsonBody(request))));
   app.delete<{ Params: { resourceId: string } }>("/api/statics/:resourceId", async (request, reply) => jsonReply(reply, await options.service.deleteStatic(validId(request.params.resourceId))));
+  app.post("/api/directs", async (request, reply) => jsonReply(reply, await options.service.createDirect(jsonBody(request))));
+  app.put<{ Params: { resourceId: string } }>("/api/directs/:resourceId", async (request, reply) => jsonReply(reply, await options.service.updateDirect(validId(request.params.resourceId), jsonBody(request))));
+  app.delete<{ Params: { resourceId: string } }>("/api/directs/:resourceId", async (request, reply) => jsonReply(reply, await options.service.deleteDirect(validId(request.params.resourceId))));
+  app.post("/api/kernels", async (request, reply) => jsonReply(reply, await options.service.createKernel(jsonBody(request))));
+  app.put<{ Params: { resourceId: string } }>("/api/kernels/:resourceId", async (request, reply) => jsonReply(reply, await options.service.updateKernel(validId(request.params.resourceId), jsonBody(request))));
+  app.delete<{ Params: { resourceId: string } }>("/api/kernels/:resourceId", async (request, reply) => jsonReply(reply, await options.service.deleteKernel(validId(request.params.resourceId))));
 
   app.post("/api/rpki", async (request, reply) => jsonReply(reply, await options.service.createRpki(jsonBody(request))));
   app.put<{ Params: { resourceId: string } }>("/api/rpki/:resourceId", async (request, reply) => jsonReply(reply, await options.service.updateRpki(validId(request.params.resourceId), jsonBody(request))));

@@ -284,6 +284,8 @@ function makeSession(
         filters: [],
         rpki: [],
         staticProtocols: [],
+        directProtocols: [],
+        kernelProtocols: [],
         sourcePolicies: [],
         sessions: [],
         ibgpDomains: [],

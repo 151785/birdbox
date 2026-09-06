@@ -59,7 +59,7 @@ function normalizeLimit(inputValue: unknown, label: string): ChannelLimit {
   };
 }
 
-function normalizePolicy(inputValue: unknown, label: string, direction: PolicyDirection): ChannelPolicy {
+export function normalizeChannelPolicy(inputValue: unknown, label: string, direction: PolicyDirection): ChannelPolicy {
   const input = optionalRecord(inputValue);
   const mode = normalizeEnum(input.mode, POLICY_MODES, "form", `${label}模式`);
   let rawSteps: unknown[];
@@ -342,9 +342,9 @@ function normalizeChannel(family: AddressFamily, inputValue: unknown, defaultEna
   const exportDefineId = input.exportDefineId === null || input.exportDefineId === undefined || input.exportDefineId === ""
     ? null
     : normalizeId(input.exportDefineId, `导出 IPv${family === "ipv4" ? 4 : 6} CIDR Define ID`);
-  const importPolicy = normalizePolicy(input.importPolicy, `${family === "ipv4" ? "IPv4" : "IPv6"} 导入策略`, "import");
+  const importPolicy = normalizeChannelPolicy(input.importPolicy, `${family === "ipv4" ? "IPv4" : "IPv6"} 导入策略`, "import");
   const exportPolicyInput = optionalRecord(input.exportPolicy);
-  const exportPolicy = normalizePolicy({
+  const exportPolicy = normalizeChannelPolicy({
     ...exportPolicyInput,
     formAction: exportPolicyInput.formAction ?? (exportDefineId === null ? "none" : "cidr"),
   }, `${family === "ipv4" ? "IPv4" : "IPv6"} 导出策略`, "export");

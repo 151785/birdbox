@@ -12,6 +12,7 @@ const dirty = ref(false);
 const previewPending = ref(false);
 const applyPending = ref(false);
 const previewConfig = ref<string | null>(null);
+const previewContext = ref<string | null>(null);
 const lastPreviewSignature = ref<string | null>(null);
 const lastPreviewFailureSignature = ref<string | null>(null);
 
@@ -22,14 +23,22 @@ const contextKey = computed(() => {
 
 const draftSignature = computed(() => draft.value ? JSON.stringify(draft.value) : null);
 
-function resetDraft(): void {
+function resetDraft(clearPreview = true): void {
   draft.value = dashboard.value && isEbgpDashboardPeer(dashboard.value.selectedPeer)
     ? createSessionDraft(dashboard.value)
     : null;
   dirty.value = false;
-  previewConfig.value = null;
+  if (clearPreview) {
+    previewConfig.value = null;
+    previewContext.value = null;
+  }
   lastPreviewSignature.value = draftSignature.value;
   lastPreviewFailureSignature.value = null;
+}
+
+function setPreviewConfig(config: string | null, context = contextKey.value): void {
+  previewConfig.value = config;
+  previewContext.value = config ? context : null;
 }
 
 function replaceDraft(next: SessionDraft | null, markDirty = true): void {
@@ -49,7 +58,7 @@ function sessionPayload(): SessionMutationRequest | null {
   return toSessionMutationRequest(draft.value, peer);
 }
 
-watch([contextKey, loadGeneration], resetDraft, { immediate: true });
+watch([contextKey, loadGeneration], () => resetDraft(), { immediate: true });
 
 export function useSessionStore() {
   return {
@@ -58,6 +67,7 @@ export function useSessionStore() {
     previewPending,
     applyPending,
     previewConfig,
+    previewContext,
     lastPreviewSignature,
     lastPreviewFailureSignature,
     draftSignature,
@@ -66,5 +76,6 @@ export function useSessionStore() {
     replaceDraft,
     mutateDraft,
     sessionPayload,
+    setPreviewConfig,
   };
 }

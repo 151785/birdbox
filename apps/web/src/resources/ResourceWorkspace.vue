@@ -14,6 +14,7 @@ import PolicyResourceDialog from "./PolicyResourceDialog.vue";
 import StaticEditorDialog from "./StaticEditorDialog.vue";
 import RpkiEditorDialog from "./RpkiEditorDialog.vue";
 import SourcePolicyEditorDialog from "./SourcePolicyEditorDialog.vue";
+import SystemProtocolEditorDialog from "./SystemProtocolEditorDialog.vue";
 
 interface ResourceTab {
   id: ResourceWorkspaceTarget;
@@ -30,6 +31,8 @@ const tabs: ResourceTab[] = [
   { id: "peers", label: "eBGP 远端", eyebrow: "External definitions", title: "eBGP 远端", addLabel: "添加 Peer", columns: ["Peer", "所属节点", "邻居地址", "远端 ASN", "操作"] },
   { id: "defines", label: "Defines", eyebrow: "BIRD declarations", title: "Defines", addLabel: "添加 Define", columns: ["Define", "类型", "可用范围", "顺序", "值", "状态", "引用", "操作"], tableClass: "ordered-resource-table" },
   { id: "statics", label: "Static", eyebrow: "Node routes", title: "Static Protocols", addLabel: "添加 Static", columns: ["Static", "所属节点", "地址族", "标准路由", "Import / Export", "状态", "操作"] },
+  { id: "directs", label: "Direct", eyebrow: "Connected routes", title: "Direct Protocols", addLabel: "添加 Direct", columns: ["Direct", "所属节点", "接口", "地址族", "状态", "操作"] },
+  { id: "kernels", label: "Kernel", eyebrow: "FIB export", title: "Kernel Protocols", addLabel: "添加 Kernel", columns: ["Kernel", "下发节点", "地址族", "策略", "状态", "操作"] },
   { id: "functions", label: "Functions", eyebrow: "BIRD functions", title: "Functions", addLabel: "添加 Function", columns: ["显示名称 / Function", "可用范围", "顺序", "状态", "引用", "操作"], tableClass: "ordered-resource-table" },
   { id: "filters", label: "Filters", eyebrow: "BIRD filters", title: "Filters", addLabel: "添加 Filter", columns: ["显示名称 / Filter", "可用范围", "状态", "引用", "操作"] },
   { id: "rpki", label: "RPKI", eyebrow: "ROA sources", title: "RPKI", addLabel: "添加 RPKI", columns: ["资源", "来源", "可用范围", "ROA Table", "状态", "操作"] },
@@ -104,6 +107,8 @@ function rowsDomId(target: ResourceWorkspaceTarget): string {
     peers: "managementPeerRows",
     defines: "managementDefineRows",
     statics: "managementStaticRows",
+    directs: "managementDirectRows",
+    kernels: "managementKernelRows",
     functions: "managementFunctionRows",
     filters: "managementFilterRows",
     rpki: "managementRPKIRows",
@@ -140,7 +145,7 @@ onBeforeUnmount(() => {
     <button v-for="(tab, index) in tabs" :id="tabDomId(tab.id)" :key="tab.id" class="resource-tab" :class="{ active: activeTab === tab.id }" type="button" role="tab" :aria-selected="activeTab === tab.id" :aria-controls="`resource-${tab.id}`" :data-resource-tab="tab.id" :tabindex="activeTab === tab.id ? 0 : -1" @click="selectTab(tab.id)" @keydown="moveTab($event, index)">{{ tab.label }}</button>
   </nav>
   <section :id="`resource-${active.id}`" class="resource-section resource-panel" role="tabpanel">
-    <div class="section-heading compact"><div><p class="eyebrow">{{ active.eyebrow }}</p><h3>{{ active.title }}</h3></div><button class="primary-button compact-command" type="button" :disabled="(active.id === 'peers' || active.id === 'statics' || active.id === 'sourcePolicies') && !nodesAvailable" @click="create(active.id)">+ {{ active.addLabel }}</button></div>
+    <div class="section-heading compact"><div><p class="eyebrow">{{ active.eyebrow }}</p><h3>{{ active.title }}</h3></div><button class="primary-button compact-command" type="button" :disabled="(active.id === 'peers' || active.id === 'statics' || active.id === 'directs' || active.id === 'kernels' || active.id === 'sourcePolicies') && !nodesAvailable" @click="create(active.id)">+ {{ active.addLabel }}</button></div>
     <div class="resource-table-wrap"><table :class="active.tableClass"><thead><tr><th v-for="column in active.columns" :key="column">{{ column }}</th></tr></thead><tbody :id="rowsDomId(active.id)"><ResourceTable :kind="active.id" /></tbody></table></div>
   </section>
   <NodeEditorDialog />
@@ -149,4 +154,5 @@ onBeforeUnmount(() => {
   <StaticEditorDialog />
   <RpkiEditorDialog />
   <SourcePolicyEditorDialog />
+  <SystemProtocolEditorDialog />
 </template>

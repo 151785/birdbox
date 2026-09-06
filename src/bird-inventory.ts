@@ -4,6 +4,8 @@ import type {
   Inventory,
   TopologyPosition,
   PolicyDefine,
+  DirectProtocol,
+  KernelProtocol,
 } from "../packages/contracts/src/inventory.js";
 import {
   assertValidation,
@@ -29,6 +31,7 @@ import {
 import { normalizeIbgpDomain } from "./ibgp-domain.js";
 import { validateResourceDependencyGraph } from "./bird-resource-dependencies.js";
 import { normalizeOspfDomain, ospfDomainNodeIds } from "./ospf.js";
+import { normalizeDirectProtocol, normalizeKernelProtocol } from "./bird-system-protocols.js";
 import {
   resourceAppliesToNode,
   scopedNodeIds,
@@ -91,6 +94,10 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
   const filters = list(input, "filters").map(normalizePolicyFilter);
   const rpki = list(input, "rpki").map(normalizeRPKISource);
   let staticProtocols = list(input, "staticProtocols").map(normalizeStaticProtocol);
+  const hasDirectProtocols = input.directProtocols !== undefined;
+  const hasKernelProtocols = input.kernelProtocols !== undefined;
+  const directProtocols = list(input, "directProtocols").map((item) => normalizeDirectProtocol(item));
+  const kernelProtocols = list(input, "kernelProtocols").map((item) => normalizeKernelProtocol(item));
   const sourcePolicies = list(input, "sourcePolicies").map(normalizeSourcePolicyEgress);
   const sessions = list(input, "sessions").map(normalizeSession);
   const ibgpDomains = list(input, "ibgpDomains").map(normalizeIbgpDomain);
@@ -115,10 +122,33 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
   assertValidation(new Set(allIbgpAdjacencies.map((item) => item.id)).size === allIbgpAdjacencies.length, "跨 iBGP 域的邻接 ID 重复");
 
   const nodeMap = new Map(nodes.map((item) => [item.id, item]));
+  const normalizedDirectProtocols: DirectProtocol[] = hasDirectProtocols
+    ? directProtocols
+    : nodes.map((node) => normalizeDirectProtocol({ id: `direct_${node.id}`, label: `${node.name} Direct`, name: node.directProtocol.name, nodeId: node.id, interfaces: node.directProtocol.interfaces, ipv4: node.directProtocol.ipv4, ipv6: node.directProtocol.ipv6, enabled: node.directProtocol.enabled }));
+  const normalizedKernelProtocols: KernelProtocol[] = hasKernelProtocols
+    ? kernelProtocols
+    : nodes.map((node) => normalizeKernelProtocol({ id: `kernel_${node.id}`, label: `${node.name} Kernel`, name: node.kernelProtocol.name, nodeIds: [node.id], ipv4: node.kernelProtocol.ipv4, ipv6: node.kernelProtocol.ipv6, importPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.import }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.export }, table: node.kernelProtocol.table, scanTime: node.kernelProtocol.scanTime, persist: node.kernelProtocol.persist, enabled: node.kernelProtocol.enabled }));
+  assertValidation(new Set(normalizedDirectProtocols.map((item) => item.id)).size === normalizedDirectProtocols.length, "Direct 资源 ID 重复");
+  assertValidation(new Set(normalizedKernelProtocols.map((item) => item.id)).size === normalizedKernelProtocols.length, "Kernel 资源 ID 重复");
+  for (const resource of normalizedDirectProtocols) assertValidation(nodeMap.has(resource.nodeId), `Direct 资源 ${resource.name} 引用了不存在的节点`);
+  for (const resource of normalizedKernelProtocols) for (const nodeId of resource.nodeIds ?? []) assertValidation(nodeMap.has(nodeId), `Kernel 资源 ${resource.name} 引用了不存在的节点`);
   const peerMap = new Map(peers.map((item) => [item.id, item]));
   const defineMap = new Map(defines.map((item) => [item.id, item]));
   const functionMap = new Map(functions.map((item) => [item.id, item]));
   const filterMap = new Map(filters.map((item) => [item.id, item]));
+  for (const resource of normalizedKernelProtocols) {
+    const targetNodeIds = resource.nodeIds ?? nodes.map((node) => node.id);
+    for (const policy of [resource.importPolicy, resource.exportPolicy]) {
+      for (const step of policy.steps.filter((item) => item.type === "function")) {
+        const fn = functionMap.get(step.functionId);
+        assertValidation(fn && fn.enabled && fn.callable && targetNodeIds.every((nodeId) => resourceAppliesToNode(fn, nodeId)), `Kernel 资源 ${resource.name} 引用了不可用的 Function`);
+      }
+      if (policy.filterId !== null) {
+        const filter = filterMap.get(policy.filterId);
+        assertValidation(filter && filter.enabled && targetNodeIds.every((nodeId) => resourceAppliesToNode(filter, nodeId)), `Kernel 资源 ${resource.name} 引用了不可用的 Filter`);
+      }
+    }
+  }
   const ospfLayout = normalizeOspfLayout(input.ospfLayout, new Set(nodes.map((node) => node.id)), ospfDomains);
   for (const domain of ospfDomains) {
     const nodeConfigIds = new Set(domain.nodeConfigs.map((item) => item.nodeId));
@@ -285,6 +315,8 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
       ...nodeFunctions.map((item) => item.name),
       ...nodeFilters.map((item) => item.name),
       ...nodeSessions.map((item) => item.protocolName),
+      ...normalizedDirectProtocols.filter((item) => item.enabled && item.nodeId === node.id).map((item) => item.name),
+      ...normalizedKernelProtocols.filter((item) => item.enabled && resourceAppliesToNode(item, node.id)).flatMap((item) => item.ipv4 && item.ipv6 ? [`${item.name}4`, `${item.name}6`] : [item.name]),
       ...nodeStaticProtocols.map((item) => item.name),
       ...nodeRPKI.flatMap((item) => [
         item.name,
@@ -375,6 +407,8 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
     filters,
     rpki,
     staticProtocols,
+    directProtocols: normalizedDirectProtocols,
+    kernelProtocols: normalizedKernelProtocols,
     sourcePolicies,
     sessions,
     ibgpDomains,

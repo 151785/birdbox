@@ -867,6 +867,8 @@ export class NodeOnboardingService {
             rpki: removeNodeFromMultiScope(current.rpki, targetNode.id),
             sourcePolicies: removeNodeFromMultiScope(current.sourcePolicies, targetNode.id),
             staticProtocols: current.staticProtocols.filter((item) => item.nodeId !== targetNode.id),
+            directProtocols: current.directProtocols.filter((item) => item.nodeId !== targetNode.id),
+            kernelProtocols: removeNodeFromMultiScope(current.kernelProtocols, targetNode.id),
           });
           const state = await this.#options.store.replace(current, inventory);
           committed = true;

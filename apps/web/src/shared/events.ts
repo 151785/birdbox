@@ -29,7 +29,7 @@ export interface DashboardSelectionEventDetail {
   peerId: string | null;
 }
 
-export type ResourceWorkspaceTarget = "nodes" | "peers" | "defines" | "statics" | "functions" | "filters" | "rpki" | "sourcePolicies";
+export type ResourceWorkspaceTarget = "nodes" | "peers" | "defines" | "statics" | "directs" | "kernels" | "functions" | "filters" | "rpki" | "sourcePolicies";
 export type ResourceEditKind = ResourceWorkspaceTarget;
 
 declare global {

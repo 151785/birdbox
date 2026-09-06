@@ -1,7 +1,7 @@
 import net from "node:net";
 import path from "node:path";
 
-import type { ManagedNode, Peer } from "../packages/contracts/src/inventory.js";
+import type { DirectProtocolOptions, KernelProtocolOptions, ManagedNode, Peer } from "../packages/contracts/src/inventory.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -11,6 +11,7 @@ const SSH_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/i;
 const ABSOLUTE_PATH_RE = /^\/[A-Za-z0-9_./-]{1,254}$/;
 const DEPLOYMENT_MODES = new Set(["legacy", "include"] as const);
 const SSH_IDENTITY_MODES = new Set(["default", "managed"] as const);
+const PROTOCOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 export const RUNTIME = Object.freeze({
   baseDir: process.env.BIRDBOX_RUNTIME_DIR ?? "/var/lib/birdbox-demo",
@@ -174,6 +175,45 @@ export function normalizeNode(inputValue: unknown): ManagedNode {
       assertValidation(sshIdentity === "managed", "Include 节点必须使用 Birdbox 托管密钥");
     }
   }
+  const directInput = input.directProtocol && typeof input.directProtocol === "object" && !Array.isArray(input.directProtocol)
+    ? input.directProtocol as UnknownRecord : {};
+  const kernelInput = input.kernelProtocol && typeof input.kernelProtocol === "object" && !Array.isArray(input.kernelProtocol)
+    ? input.kernelProtocol as UnknownRecord : {};
+  const directName = String(directInput.name ?? "birdbox_direct").trim();
+  assertValidation(PROTOCOL_NAME_RE.test(directName), "Direct 协议名称不合法");
+  const kernelName = String(kernelInput.name ?? "birdbox_kernel").trim();
+  assertValidation(PROTOCOL_NAME_RE.test(kernelName), "Kernel 协议名称不合法");
+  const normalizeInterfaces = (value: unknown): string[] => {
+    if (value === undefined || value === null || value === "") return [];
+    const values = Array.isArray(value) ? value : String(value).split(",");
+    const result = values.map((item) => String(item).trim()).filter(Boolean);
+    assertValidation(result.length <= 64, "Direct 接口匹配规则过多");
+    for (const item of result) assertValidation(item.length <= 128 && !/[\u0000-\u001f\u007f;]/.test(item), "Direct 接口匹配规则不合法");
+    return [...new Set(result)];
+  };
+  const directProtocol: DirectProtocolOptions = {
+    enabled: directInput.enabled !== false,
+    name: directName,
+    ipv4: directInput.ipv4 !== false,
+    ipv6: directInput.ipv6 !== false,
+    interfaces: normalizeInterfaces(directInput.interfaces),
+  };
+  const kernelTable = normalizeOptionalInteger(kernelInput.table, "Kernel 路由表", 1, 4294967295);
+  const scanTime = normalizeOptionalInteger(kernelInput.scanTime, "Kernel 扫描周期", 1, 86400);
+  const kernelProtocol: KernelProtocolOptions = {
+    enabled: kernelInput.enabled !== false,
+    name: kernelName,
+    ipv4: kernelInput.ipv4 !== false,
+    ipv6: kernelInput.ipv6 !== false,
+    import: normalizeEnum(kernelInput.import, new Set(["all", "none"] as const), "none", "Kernel 导入策略"),
+    export: normalizeEnum(kernelInput.export, new Set(["all", "none"] as const), "all", "Kernel 导出策略"),
+    table: kernelTable,
+    scanTime,
+    persist: kernelInput.persist === true,
+  };
+  assertValidation(!(kernelProtocol.ipv4 && kernelProtocol.ipv6) || kernelName.length <= 62, "双栈 Kernel 协议名称最多 62 个字符");
+  assertValidation(directProtocol.ipv4 || directProtocol.ipv6 || !directProtocol.enabled, "Direct 至少启用一个地址族");
+  assertValidation(kernelProtocol.ipv4 || kernelProtocol.ipv6 || !kernelProtocol.enabled, "Kernel 至少启用一个地址族");
   return {
     id: normalizeId(input.id, "节点 ID"),
     kind: "managed-node",
@@ -200,6 +240,8 @@ export function normalizeNode(inputValue: unknown): ManagedNode {
       ? null
       : normalizeIPAddress(input.igpAddress, "IGP 地址"),
     listenPort: normalizePort(input.listenPort, "本地监听端口", RUNTIME.defaultBgpPort),
+    directProtocol,
+    kernelProtocol,
   };
 }
 

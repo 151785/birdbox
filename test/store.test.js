@@ -419,6 +419,8 @@ test("merges v10 CIDR lists before expression Defines and preserves v19 resource
   assert.equal(state.sessions[0].channels.ipv4.exportPolicy.formAction, "cidr");
   assert.equal(state.sessions[0].channels.ipv4.static, undefined);
   assert.deepEqual(state.staticProtocols.map((resource) => [resource.defineId, resource.action]), [["prefix_global", "blackhole"]]);
+  assert.deepEqual(state.directProtocols.map((resource) => [resource.nodeId, resource.name]), [["local", "birdbox_direct"]]);
+  assert.deepEqual(state.kernelProtocols.map((resource) => [resource.nodeIds, resource.name]), [[['local'], "birdbox_kernel"]]);
   assert.equal(state.sessions[0].prefixListId, undefined);
   assert.equal(state.prefixLists, undefined);
 });

@@ -13,6 +13,8 @@ import type {
   PolicyFunction,
   RpkiSource,
   SourcePolicyEgress,
+  DirectProtocol,
+  KernelProtocol,
   StaticRouteFilter,
   StaticRouteFilterOperation,
   OspfDomain,
@@ -35,6 +37,7 @@ import { normalizeRPKISource } from "./bird-rpki.js";
 import { normalizeSession } from "./bird-session.js";
 import { normalizeStaticProtocol, staticRouteDefinitionSignature } from "./bird-static.js";
 import { normalizeSourcePolicyEgress, renderSourcePolicyEgress, sourcePolicyForNode } from "./bird-source-policy.js";
+import { normalizeDirectProtocol, normalizeKernelProtocol } from "./bird-system-protocols.js";
 import { normalizeOspfDomain, ospfDomainNodeIds, ospfProtocolName } from "./ospf.js";
 import type { NodeConfigBundle } from "./config-bundle.js";
 import path from "node:path";
@@ -116,6 +119,43 @@ export function locateStaticRouteDiagnostic(config: unknown, diagnostic: unknown
 
 function renderSetting(name: string, value: string, spaces = 2): string {
   return value === "default" ? "" : `${" ".repeat(spaces)}${name} ${value};\n`;
+}
+
+function renderNodeProtocols(node: ManagedNode, directResources: DirectProtocol[], kernelResources: KernelProtocol[], functionMap: ReadonlyMap<string, PolicyFunction>, filterMap: ReadonlyMap<string, PolicyFilter>): string {
+  let output = "";
+  const directList = directResources.length ? directResources.filter((item) => item.enabled && item.nodeId === node.id) : [];
+  const kernelList = kernelResources.length ? kernelResources.filter((item) => item.enabled && resourceAppliesToNode(item, node.id)) : [];
+  for (const direct of directList) {
+    output += `\nprotocol direct ${direct.name} {\n`;
+    const interfaces = direct.interfaces.length ? direct.interfaces : ["*"];
+    output += `  interface ${interfaces.map((item) => birdString(item)).join(", ")};\n`;
+    // Direct's native defaults are import-all/export-none. Omitting the
+    // policy block also keeps the generated declaration compatible with
+    // BIRD versions that treat the two policies as a single channel type.
+    if (direct.ipv4) output += "  ipv4;\n";
+    if (direct.ipv6) output += "  ipv6;\n";
+    output += "}\n";
+  }
+  for (const kernel of kernelList) {
+    const families = [
+      ...(kernel.ipv4 ? [{ family: "ipv4", suffix: "4" }] : []),
+      ...(kernel.ipv6 ? [{ family: "ipv6", suffix: "6" }] : []),
+    ] as const;
+    for (const { family, suffix } of families) {
+      // BIRD's kernel protocol is single-family; split dual-stack settings
+      // into two instances while keeping the configured base name readable.
+      const protocolName = families.length === 1 ? kernel.name : `${kernel.name}${suffix}`;
+      output += `\nprotocol kernel ${protocolName} {\n`;
+      if (kernel.table !== null) output += `  kernel table ${kernel.table};\n`;
+      if (kernel.scanTime !== null) output += `  scan time ${kernel.scanTime};\n`;
+      if (kernel.persist) output += "  persist;\n";
+      const importPolicy = renderPolicy(kernel.importPolicy, "import", null, functionMap, filterMap).replace(/^    /gm, "  ");
+      const exportPolicy = renderPolicy(kernel.exportPolicy, "export", null, functionMap, filterMap).replace(/^    /gm, "  ");
+      output += `  ${family} {\n${importPolicy}${exportPolicy}  };\n`;
+      output += "}\n";
+    }
+  }
+  return output;
 }
 
 function renderLimit(name: string, limit: ChannelLimit): string {
@@ -580,12 +620,20 @@ export function renderBirdConfig(
   staticInputs: readonly unknown[] = [],
   sourcePolicyInputs: readonly unknown[] = [],
   ospfInputs: readonly unknown[] = [],
+  directInputs?: readonly unknown[],
+  kernelInputs?: readonly unknown[],
 ): string {
   const node = normalizeNode(nodeInput);
   const peers = peerInputs.map(normalizePeer);
   const defines = defineInputs.map(normalizeDefine).filter((item) => item.enabled);
   const functions = functionInputs.map(normalizePolicyFunction).filter((item) => item.enabled);
   const filters = filterInputs.map(normalizePolicyFilter).filter((item) => item.enabled);
+  const directResources = directInputs !== undefined
+    ? directInputs.map(normalizeDirectProtocol).filter((item) => item.enabled)
+    : [normalizeDirectProtocol({ id: `direct_${node.id}`, label: `${node.name} Direct`, name: node.directProtocol.name, nodeId: node.id, interfaces: node.directProtocol.interfaces, ipv4: node.directProtocol.ipv4, ipv6: node.directProtocol.ipv6, enabled: node.directProtocol.enabled })];
+  const kernelResources = kernelInputs !== undefined
+    ? kernelInputs.map(normalizeKernelProtocol).filter((item) => item.enabled)
+    : [normalizeKernelProtocol({ id: `kernel_${node.id}`, label: `${node.name} Kernel`, name: node.kernelProtocol.name, nodeIds: [node.id], ipv4: node.kernelProtocol.ipv4, ipv6: node.kernelProtocol.ipv6, importPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.import }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.export }, table: node.kernelProtocol.table, scanTime: node.kernelProtocol.scanTime, persist: node.kernelProtocol.persist, enabled: node.kernelProtocol.enabled })];
   const rpki = rpkiInputs.map(normalizeRPKISource).filter((item) => item.enabled && resourceAppliesToNode(item, node.id));
   const staticProtocols = staticInputs.map(normalizeStaticProtocol).filter((item) => item.enabled && item.nodeId === node.id);
   const sourcePolicies = sourcePolicyInputs.map(normalizeSourcePolicyEgress)
@@ -650,6 +698,7 @@ export function renderBirdConfig(
   } else {
     config += "# This file is included by the system BIRD configuration.\n";
   }
+  config += renderNodeProtocols(node, directResources, kernelResources, functionMap, filterMap);
   for (const resource of defines) {
     if (resource.type !== "expression" && resource.entrySource.kind === "irr-as-set") {
       const resourceDirectory = node.deploymentMode === "include"
@@ -719,10 +768,12 @@ export function renderBirdConfigBundle(
   staticInputs: readonly unknown[] = [],
   sourcePolicyInputs: readonly unknown[] = [],
   ospfInputs: readonly unknown[] = [],
+  directInputs?: readonly unknown[],
+  kernelInputs?: readonly unknown[],
 ): NodeConfigBundle {
   const node = normalizeNode(nodeInput);
   const defines = defineInputs.map(normalizeDefine).filter((item) => item.enabled);
-  const main = renderBirdConfig(node, peerInputs, sessionInputs, functionInputs, filterInputs, defines, rpkiInputs, staticInputs, sourcePolicyInputs, ospfInputs);
+  const main = renderBirdConfig(node, peerInputs, sessionInputs, functionInputs, filterInputs, defines, rpkiInputs, staticInputs, sourcePolicyInputs, ospfInputs, directInputs, kernelInputs);
   const resources = defines.flatMap((resource) => resource.type !== "expression" && resource.entrySource.kind === "irr-as-set"
     ? [{
         relativePath: `define_${resource.id}.conf`,

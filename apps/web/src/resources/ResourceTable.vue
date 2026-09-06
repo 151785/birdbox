@@ -155,6 +155,30 @@ function sourcePolicySources(resource: SourcePolicyEgress): number {
     </tr>
   </template>
 
+  <template v-else-if="kind === 'directs'">
+    <tr v-if="!inventory?.directProtocols.length"><td colspan="6" class="empty-cell">尚无 Direct 资源</td></tr>
+    <tr v-for="resource in inventory?.directProtocols ?? []" v-else :key="resource.id">
+      <td><strong>{{ resource.label }}</strong><small>{{ resource.name }} · {{ resource.id }}</small></td>
+      <td>{{ nodeNames.get(resource.nodeId) ?? resource.nodeId }}</td>
+      <td><code>{{ resource.interfaces.length ? resource.interfaces.join(', ') : '*' }}</code></td>
+      <td>{{ [resource.ipv4 ? 'IPv4' : '', resource.ipv6 ? 'IPv6' : ''].filter(Boolean).join(' / ') }}</td>
+      <td><span class="resource-state" :class="resource.enabled ? 'enabled' : 'disabled'">{{ resource.enabled ? '已启用' : '已停用' }}</span></td>
+      <td><button class="row-edit-button" type="button" title="编辑 Direct" :aria-label="`编辑 Direct ${resource.name}`" @click="edit('directs', resource.id)">✎</button></td>
+    </tr>
+  </template>
+
+  <template v-else-if="kind === 'kernels'">
+    <tr v-if="!inventory?.kernelProtocols.length"><td colspan="6" class="empty-cell">尚无 Kernel 资源</td></tr>
+    <tr v-for="resource in inventory?.kernelProtocols ?? []" v-else :key="resource.id">
+      <td><strong>{{ resource.label }}</strong><small>{{ resource.name }} · {{ resource.id }}</small></td>
+      <td :title="resourceScopeLabel(resource, nodeNames)">{{ resourceScopeCompactLabel(resource, nodeNames) }}</td>
+      <td>{{ [resource.ipv4 ? 'IPv4' : '', resource.ipv6 ? 'IPv6' : ''].filter(Boolean).join(' / ') }}</td>
+      <td><code>{{ resource.importPolicy.formAction }} / {{ resource.exportPolicy.formAction }}</code></td>
+      <td><span class="resource-state" :class="resource.enabled ? 'enabled' : 'disabled'">{{ resource.enabled ? '已启用' : '已停用' }}</span></td>
+      <td><button class="row-edit-button" type="button" title="编辑 Kernel" :aria-label="`编辑 Kernel ${resource.name}`" @click="edit('kernels', resource.id)">✎</button></td>
+    </tr>
+  </template>
+
   <template v-else-if="kind === 'functions'">
     <tr v-if="!inventory?.functions.length"><td colspan="6" class="empty-cell">尚无 Function</td></tr>
     <tr v-for="(resource, index) in inventory?.functions ?? []" v-else :key="resource.id">

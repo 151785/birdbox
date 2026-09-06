@@ -187,6 +187,20 @@ sh birdbox-node-setup.sh
 
 预检或部署失败时，Birdbox 不会提交库存变更；已经完成的节点会尝试回滚。重复提交前应先刷新状态，确认远端和库存是否已经完成变更。
 
+## 用户操作手册与界面预览
+
+完整的中文用户教程、部署步骤、eBGP/iBGP/OSPF 全流程、资源用途、故障处理和最佳实践见 [Birdbox 用户操作手册](docs/user-guide.md)。
+
+下面的截图来自开发实例的真实前端页面，并通过 Playwright 采集：
+
+![eBGP 管理](docs/images/ebgp-overview.png)
+
+![iBGP 域管理](docs/images/ibgp-domain.png)
+
+![OSPF 管理](docs/images/ospf-domain.png)
+
+![资源管理](docs/images/resource-management.png)
+
 ## 路由策略资源
 
 ### Define

@@ -57,6 +57,8 @@ const draft = reactive<NodeDraft>({
   routerId: "",
   igpAddress: null,
   listenPort: 179,
+  directProtocol: { enabled: true, name: "birdbox_direct", ipv4: true, ipv6: true, interfaces: [] },
+  kernelProtocol: { enabled: true, name: "birdbox_kernel", ipv4: true, ipv6: true, import: "none", export: "all", table: null, scanTime: 60, persist: false },
 });
 
 const editing = computed(() => editingId.value !== null);
@@ -100,6 +102,8 @@ function resetDraft(node: ManagedNode | null): void {
     routerId: node?.routerId ?? "",
     igpAddress: node?.igpAddress ?? null,
     listenPort: node?.listenPort ?? 179,
+    directProtocol: structuredClone(node?.directProtocol ?? { enabled: true, name: "birdbox_direct", ipv4: true, ipv6: true, interfaces: [] }),
+    kernelProtocol: structuredClone(node?.kernelProtocol ?? { enabled: true, name: "birdbox_kernel", ipv4: true, ipv6: true, import: "none", export: "all", table: null, scanTime: 60, persist: false }),
   });
   verified.value = Boolean(node);
   onboardingStatus.value = node ? "已接入" : "等待连接测试";
@@ -242,6 +246,8 @@ function onboardingPayload(): NodeMutationRequest {
     routerId: String(value.routerId),
     igpAddress: value.igpAddress === null || value.igpAddress === undefined || value.igpAddress === "" ? null : String(value.igpAddress),
     listenPort: Number(value.listenPort),
+    directProtocol: value.directProtocol,
+    kernelProtocol: value.kernelProtocol,
   };
 }
 
@@ -403,6 +409,8 @@ async function retire(force: boolean): Promise<void> {
       ["RPKI", inventory.rpki.filter((item) => resourceExplicitlyScopesNode(item, node.id)).length],
       ["源地址出口", (inventory.sourcePolicies ?? []).filter((item) => resourceExplicitlyScopesNode(item, node.id)).length],
       ["Static", inventory.staticProtocols.filter((item) => item.nodeId === node.id).length],
+      ["Direct", inventory.directProtocols.filter((item) => item.nodeId === node.id).length],
+      ["Kernel", inventory.kernelProtocols.filter((item) => resourceExplicitlyScopesNode(item, node.id)).length],
     ].map(([label, count]) => `${label} ${count}`).join("、");
     if (!window.confirm(`强制删除 ${node.name} (${node.sshHost}:${node.sshPort})？将处理关联资源：${counts}。多节点 Define/Function/Filter/RPKI 只会移除此节点的可用范围；操作不会清理远端配置。`)) return;
     const confirmation = `强制删除 ${node.id}`;

@@ -235,6 +235,7 @@ exit 0
   const previewResult = await preview;
   assert.equal(previewResult.status, 200);
   assert.equal(previewResult.body.valid, true);
+  assert.equal(typeof previewResult.body.sessionConfig, "string");
   assert.doesNotMatch(
     previewResult.body.events.map((entry) => entry.message).join("\n"),
     /正在检查 .*候选配置|候选配置检查通过/,
@@ -342,6 +343,7 @@ exit 0
   assert.equal(enabledSession.status, 202);
   assert.equal(enabledSession.body.applied, true);
   assert.equal(enabledSession.body.established, false);
+  assert.match(enabledSession.body.sessionConfig, /protocol bgp preview_bgp/);
   assert.ok(Date.now() - enabledApplyStarted < 5000, "会话应用接口不应等待 BGP 状态建立");
 
   const sshLogBeforeForce = await fs.readFile(fakeLog, "utf8");

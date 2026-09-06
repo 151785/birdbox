@@ -16,6 +16,8 @@ import {
   makeStaticProtocolName,
   normalizeNode,
   normalizeDefine,
+  normalizeDirectProtocol,
+  normalizeKernelProtocol,
   normalizePeer,
   normalizePolicyFilter,
   normalizePolicyFunction,
@@ -541,6 +543,39 @@ test("renders reusable defines and session-specific local endpoints", () => {
   assert.match(config, /if net ~ TRANSIT_EXPORTS then accept;/);
   assert.match(config, /if net ~ IX_EXPORTS then accept;/);
   assert.equal((config.match(/multihop 10;/g) ?? []).length, 1);
+});
+
+test("manages node-level Direct and Kernel protocols with legacy defaults", () => {
+  const normalized = normalizeNode({ id: "router", name: "Router", transport: "local", routerId: "192.0.2.1" });
+  assert.equal(normalized.directProtocol.enabled, true);
+  assert.equal(normalized.kernelProtocol.enabled, true);
+  assert.deepEqual(normalized.directProtocol.interfaces, []);
+  const config = renderBirdConfig({
+    ...normalized,
+    directProtocol: { ...normalized.directProtocol, interfaces: ["eth*", "br-lan"] },
+    kernelProtocol: { ...normalized.kernelProtocol, table: 100, scanTime: 30, persist: true },
+  }, [], [], [], [], [], [], [], [], []);
+  assert.match(config, /protocol direct birdbox_direct/);
+  assert.match(config, /interface "eth\*", "br-lan";/);
+  assert.match(config, /ipv4;\n  ipv6;/);
+  assert.match(config, /protocol kernel birdbox_kernel4/);
+  assert.match(config, /protocol kernel birdbox_kernel6/);
+  assert.equal((config.match(/kernel table 100;/g) ?? []).length, 2);
+  assert.equal((config.match(/scan time 30;/g) ?? []).length, 2);
+  assert.equal((config.match(/persist;/g) ?? []).length, 2);
+});
+
+test("uses explicit Direct and Kernel resources, including an intentional empty set", () => {
+  const normalized = normalizeNode({ id: "router", name: "Router", transport: "local", routerId: "192.0.2.1" });
+  const direct = normalizeDirectProtocol({ id: "direct_eth", label: "Ethernet", name: "direct_eth", nodeId: normalized.id, interfaces: ["eth0"], ipv4: true, ipv6: false });
+  const kernel = normalizeKernelProtocol({ id: "kernel_main", label: "Main FIB", name: "kernel_main", nodeIds: [normalized.id], ipv4: true, ipv6: true, importPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: "all" } });
+  const config = renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [direct,], [kernel]);
+  assert.match(config, /protocol direct direct_eth/);
+  assert.match(config, /protocol kernel kernel_main4/);
+  assert.match(config, /protocol kernel kernel_main6/);
+  const empty = renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [], []);
+  assert.doesNotMatch(empty, /protocol direct birdbox_direct/);
+  assert.doesNotMatch(empty, /protocol kernel birdbox_kernel/);
 });
 
 test("renders per-CIDR Static actions and follows Define entry changes", () => {

@@ -26,9 +26,11 @@ import ChannelEditor from "./ChannelEditor.vue";
 import PolicyActionDialog from "./PolicyActionDialog.vue";
 import { channelRequiresExtendedNextHop } from "./session-draft";
 import { useSessionStore } from "./session-store";
+import { extractBgpProtocolConfig } from "./session-config";
 
 interface SessionErrorData {
   config?: string;
+  sessionConfig?: string;
   events?: ChangeEvent[];
 }
 
@@ -39,6 +41,8 @@ const {
   dirty,
   previewPending,
   applyPending,
+  setPreviewConfig,
+  contextKey,
   lastPreviewSignature,
   lastPreviewFailureSignature,
   draftSignature,
@@ -68,7 +72,6 @@ const pairLocal = computed(() => draft.value
   ? `${draft.value.localAddress || "自动选择"} · ${draft.value.localAsn ? `AS${draft.value.localAsn}` : "ASN 未设置"}`
   : "-");
 const pairRemote = computed(() => peer.value ? `${peer.value.address} · AS${peer.value.asn}` : "-");
-const currentConfig = computed(() => dashboard.value?.config ?? "# 尚无配置");
 
 function visibleDefines(family: AddressFamily) {
   return dashboard.value?.cidrDefines[family] ?? [];
@@ -173,8 +176,15 @@ function hasScope(address: string | null): boolean {
   return String(address ?? "").includes("%");
 }
 
-function updateDashboardPreview(config: string | undefined, events: ChangeEvent[] | undefined): void {
-  if (!dashboard.value || (!config && !events)) return;
+function updateDashboardPreview(
+  config: string | undefined,
+  events: ChangeEvent[] | undefined,
+  protocolName = draft.value?.protocolName,
+  sessionConfig?: string,
+): void {
+  if (!dashboard.value || (!config && !events && sessionConfig === undefined)) return;
+  const selectedConfig = sessionConfig || (config ? extractBgpProtocolConfig(config, protocolName) : null);
+  if (config || sessionConfig !== undefined) setPreviewConfig(selectedConfig, contextKey.value);
   setDashboardSnapshot({
     ...dashboard.value,
     ...(config ? { config } : {}),
@@ -277,7 +287,7 @@ function commitAppliedSession(result: SessionApplyResponse): void {
         : activeSessions > normalSessions ? "warning" : "ready",
     },
   });
-  resetDraft();
+  resetDraft(false);
 }
 
 async function preview(silent = false): Promise<boolean> {
@@ -312,7 +322,7 @@ async function preview(silent = false): Promise<boolean> {
       autoPreviewQueued = true;
       return false;
     }
-    updateDashboardPreview(result.config, result.events);
+    updateDashboardPreview(result.config, result.events, result.session.protocolName, result.sessionConfig);
     lastPreviewSignature.value = signature;
     lastPreviewFailureSignature.value = null;
     dirty.value = false;
@@ -325,7 +335,7 @@ async function preview(silent = false): Promise<boolean> {
       return false;
     }
     const data = error instanceof ApiError ? error.data as SessionErrorData : undefined;
-    updateDashboardPreview(data?.config, data?.events);
+    updateDashboardPreview(data?.config, data?.events, draft.value?.protocolName, data?.sessionConfig);
     lastPreviewFailureSignature.value = signature;
     if (!silent) await presentError(error instanceof Error ? error.message : "配置预检失败");
     return false;
@@ -341,12 +351,12 @@ async function preview(silent = false): Promise<boolean> {
   }
 }
 
-function scheduleAutoPreview(delay = 500): void {
+function scheduleAutoPreview(delay = 500, force = false): void {
   if (autoPreviewTimer !== null) window.clearTimeout(autoPreviewTimer);
   autoPreviewTimer = window.setTimeout(() => {
     autoPreviewTimer = null;
     const signature = draftSignature.value;
-    if (!signature || signature === lastPreviewSignature.value || signature === lastPreviewFailureSignature.value) return;
+    if (!signature || (!force && (signature === lastPreviewSignature.value || signature === lastPreviewFailureSignature.value))) return;
     if (dashboardLoading.value || applyPending.value || !validateDraft(false)) return;
     void preview(true);
   }, delay);
@@ -434,6 +444,10 @@ watch(draftSignature, (signature) => {
   dirty.value = signature !== null && signature !== lastPreviewSignature.value;
   scheduleAutoPreview();
 });
+
+// A newly selected Peer starts with an already initialized draft signature. Force
+// one preview so a new session gets a visible block before it is saved.
+watch(contextKey, () => scheduleAutoPreview(0, true), { immediate: true });
 
 onBeforeUnmount(() => {
   if (autoPreviewTimer !== null) window.clearTimeout(autoPreviewTimer);

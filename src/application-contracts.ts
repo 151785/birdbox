@@ -20,6 +20,12 @@ export interface MutationService {
   createStatic(body: Record<string, unknown>): Promise<MutationResult>;
   updateStatic(resourceId: string, body: Record<string, unknown>): Promise<MutationResult>;
   deleteStatic(resourceId: string): Promise<MutationResult>;
+  createDirect(body: Record<string, unknown>): Promise<MutationResult>;
+  updateDirect(resourceId: string, body: Record<string, unknown>): Promise<MutationResult>;
+  deleteDirect(resourceId: string): Promise<MutationResult>;
+  createKernel(body: Record<string, unknown>): Promise<MutationResult>;
+  updateKernel(resourceId: string, body: Record<string, unknown>): Promise<MutationResult>;
+  deleteKernel(resourceId: string): Promise<MutationResult>;
   createRpki(body: Record<string, unknown>): Promise<MutationResult>;
   updateRpki(resourceId: string, body: Record<string, unknown>): Promise<MutationResult>;
   deleteRpki(resourceId: string): Promise<MutationResult>;

@@ -410,6 +410,18 @@ form.validation-attempted .channel-enable-row.field-invalid h3 { color: var(--re
 .field.full-width { grid-column: 1 / -1; }
 .field label, .field-label { display: block; margin-bottom: 6px; color: var(--ink-soft); font-size: 12px; font-weight: 650; }
 .field-readonly { min-height: 38px; display: flex; align-items: center; padding: 0 11px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 5px; font-size: 13px; }
+.node-protocol-settings { margin-top: 7px; padding: 15px 0 2px; border-top: 1px solid var(--line); }
+.node-protocol-settings h3 { margin: 0; color: var(--ink); font-size: 13px; }
+.node-protocol-settings .section-heading { margin-bottom: 12px; }
+.protocol-setting-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.protocol-setting { min-width: 0; padding: 12px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 5px; }
+.protocol-setting .checkbox-label { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 12px; }
+.protocol-setting .checkbox-label input { width: auto; }
+.protocol-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-top: 12px; }
+.protocol-fields .full-width { grid-column: 1 / -1; }
+.checkbox-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 38px; }
+.checkbox-row label { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--ink-soft); font-size: 12px; font-weight: 500; }
+.checkbox-row input { width: auto; }
 .node-path-settings { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .node-path-settings summary { min-height: 42px; display: flex; align-items: center; cursor: pointer; font-size: 12px; font-weight: 700; }
 .node-path-grid { padding: 4px 0 14px; }
@@ -997,6 +1009,8 @@ dialog.ospf-path-dialog { width: min(980px, calc(100vw - 32px)); }
   .form-actions { grid-template-columns: 1fr; }
   .protocol-table-wrap table { min-width: 620px; }
   .dialog-grid .full-width { grid-column: 1; }
+  .protocol-setting-grid, .protocol-fields { grid-template-columns: 1fr; }
+  .protocol-fields .full-width { grid-column: 1; }
   .code-reference-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
   #policySourceReferenceSearch { width: 100%; }
   .code-reference-groups { grid-template-columns: 1fr; max-height: 300px; }
