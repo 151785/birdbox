@@ -594,7 +594,11 @@ function agentSetupScript(node: ManagedAgentNode, controllerUrl: string, token: 
     `test -S "$SOCKET_PATH" || { echo "BIRD Socket 不存在：$SOCKET_PATH" >&2; exit 1; }`,
     `BIRD_SOCKET_GID=$(if command -v stat >/dev/null 2>&1; then stat -c '%g' "$SOCKET_PATH"; else ls -ldn "$SOCKET_PATH" | awk '{print $4}'; fi)`,
     `CONFIG_DIR=$(dirname "$GENERATED_CONFIG")`,
-    `case "$CONFIG_DIR" in /|/etc|/var|/usr|/run) ;; *) chgrp "$BIRD_SOCKET_GID" "$CONFIG_DIR" "$GENERATED_CONFIG" 2>/dev/null || true; chmod 0750 "$CONFIG_DIR";; esac`,
+    `VERSION_DIR="$CONFIG_DIR/versions"`,
+    `mkdir -p "$VERSION_DIR"`,
+    `if [ ! -L "$GENERATED_CONFIG" ]; then INITIAL_FILE="$VERSION_DIR/$(basename "$GENERATED_CONFIG").initial.conf"; if [ -e "$GENERATED_CONFIG" ]; then cp -p "$GENERATED_CONFIG" "$INITIAL_FILE"; else : > "$INITIAL_FILE"; fi; ln -sfn "versions/$(basename "$INITIAL_FILE")" "$GENERATED_CONFIG"; fi`,
+    `chgrp "$BIRD_SOCKET_GID" "$CONFIG_DIR" "$VERSION_DIR" "$GENERATED_CONFIG" 2>/dev/null || true`,
+    `chmod 0750 "$CONFIG_DIR" "$VERSION_DIR"`,
     `chmod 0640 "$GENERATED_CONFIG"`,
   );
   return { includeLine, script: `${lines.join("\n")}\n` };

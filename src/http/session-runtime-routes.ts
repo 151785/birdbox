@@ -3,7 +3,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { ChangeEvent, DashboardRuntimeResponse, RouteDetailsResponse, RoutePathResponse } from "../../packages/contracts/src/api.js";
 import type { Inventory, ManagedNode } from "../../packages/contracts/src/inventory.js";
 import type { AuthStore } from "../auth.js";
-import { executeNodeCommand, inspectNode, inspectOspfRuntime, inspectProtocolRoutes, inspectRoutePath, setProtocolState } from "../bird.js";
+import { executeNodeCommand, executeNodeRpc, inspectNode, inspectOspfRuntime, inspectProtocolRoutes, inspectRoutePath, setProtocolState } from "../bird.js";
 import { ospfDomainNodeIds, ospfProtocolName } from "../ospf.js";
 import { configForNode } from "../inventory-domain.js";
 import type { InventoryStore } from "../store.js";
@@ -81,14 +81,16 @@ export const sessionRuntimeRoutes: FastifyPluginAsync<SessionRuntimeRoutesOption
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.params.nodeId)) throw routeError(404, "接口不存在");
     const state = await options.store.read();
     const node = findNode(state, request.params.nodeId);
-    const result = await executeNodeCommand(
-      node,
-      "ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \\([^:@]*\\).*$/\\1/p'",
-      { timeout: 10_000 },
-    );
+    const result = node.transport === "agent"
+      ? await executeNodeRpc(node, "system.interfaces", {}, 15_000)
+      : await executeNodeCommand(
+        node,
+        "ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \\([^:@]*\\).*$/\\1/p'",
+        { timeout: 10_000 },
+      );
     if (!result.ok) throw routeError(502, result.stderr || "无法读取节点接口");
-    const interfaces = result.stdout.split(/\r?\n/).map((item) => item.trim())
-      .filter((item) => /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(item));
+    const interfaces = result.stdout.split(/\r?\n/).map((item: string) => item.trim())
+      .filter((item: string) => /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(item));
     return jsonReply(reply, 200, { nodeId: node.id, interfaces: [...new Set(interfaces)] });
   });
 

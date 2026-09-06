@@ -28,6 +28,31 @@ export interface NodeCommandResult {
   code?: string | number;
 }
 
+/**
+ * Dispatch a structured operation to an outbound Agent.  The legacy command
+ * executor deliberately remains separate so SSH/local nodes keep their
+ * existing compatibility path and no RPC caller can smuggle shell source.
+ */
+export async function executeNodeRpc(
+  nodeInput: unknown,
+  method: string,
+  params: Record<string, unknown> = {},
+  timeout = 120_000,
+): Promise<NodeCommandResult> {
+  const input = nodeInput && typeof nodeInput === "object" ? nodeInput as Partial<ManagedNode> : null;
+  assertValidation(input?.kind === "managed-node", "RPC 只能在受管节点执行");
+  const node = normalizeNode(nodeInput);
+  assertValidation(node.transport === "agent", "结构化 RPC 只能用于 Agent 节点");
+  assertValidation(agentBroker !== null, "Agent 通信服务尚未初始化");
+  const result = await agentBroker.dispatch(node.id, method, params, timeout);
+  return {
+    ok: result.ok,
+    stdout: String(result.stdout ?? "").trim(),
+    stderr: String(result.stderr ?? "").trim(),
+    ...(result.code === undefined ? {} : { code: result.code }),
+  };
+}
+
 interface ExecError extends ExecFileException {
   stdout?: string;
   stderr?: string;
@@ -163,19 +188,13 @@ export async function executeNodeCommand(
   const node = normalizeNode(nodeInput);
   const { timeout, maxBuffer } = validateExecutionOptions(command, options);
   if (node.transport === "agent") {
-    assertValidation(agentBroker !== null, "Agent 通信服务尚未初始化");
-    const result = await agentBroker.dispatch(node.id, "legacy.exec", {
+    const result = await executeNodeRpc(node, "legacy.exec", {
       command,
       input: options.input ?? null,
       timeoutMs: timeout,
       maxBuffer,
     }, timeout + 10_000);
-    return {
-      ok: result.ok,
-      stdout: String(result.stdout ?? "").trim(),
-      stderr: String(result.stderr ?? "").trim(),
-      ...(result.code === undefined ? {} : { code: result.code }),
-    };
+    return result;
   }
   try {
     const executable = node.transport === "local" ? "bash" : "ssh";

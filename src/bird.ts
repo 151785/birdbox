@@ -11,6 +11,7 @@ export {
   checkIncludeNodeAccess,
   configureManagedSsh,
   configureAgentBroker,
+  executeNodeRpc,
   executeNodeCommand,
   inspectNode,
   inspectOspfRuntime,

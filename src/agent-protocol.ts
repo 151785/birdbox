@@ -29,6 +29,9 @@ export interface AgentTaskResult extends NodeCommandResponse {
 export const AGENT_PROTOCOL_VERSION = 1;
 export const AGENT_METHODS = new Set([
   "system.info",
+  "system.interfaces",
+  "bird.ospf",
+  "bird.access",
   "bird.inspect",
   "bird.validate",
   "bird.stage",
@@ -36,6 +39,7 @@ export const AGENT_METHODS = new Set([
   "bird.rollback",
   "bird.protocol",
   "bird.routes",
+  "bird.protocol_state",
   "legacy.exec",
   "agent.self_upgrade",
 ]);

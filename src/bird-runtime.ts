@@ -17,12 +17,13 @@ import { parseProtocolStatuses, parseRouteDetails, parseRoutePath, type RoutePat
 import { configBundle, type NodeConfigBundle } from "./config-bundle.js";
 import {
   configureManagedSsh,
+  executeNodeRpc,
   executeNodeCommand,
   type NodeCommandResult,
   type NodeExecutorOptions,
 } from "./node-executor.js";
 
-export { configureManagedSsh, executeNodeCommand } from "./node-executor.js";
+export { configureManagedSsh, executeNodeCommand, executeNodeRpc } from "./node-executor.js";
 export { configureAgentBroker } from "./node-executor.js";
 export type { NodeCommandResult, NodeExecutorOptions } from "./node-executor.js";
 
@@ -161,7 +162,9 @@ else
 fi
 printf '%s\\n---BIRDBOX---\\n%s\\n' "$version" "$protocols"
 `.trim();
-  const result = await executeNodeCommand(node, command, { timeout: 12_000 });
+  const result = node.transport === "agent"
+    ? await executeNodeRpc(node, "bird.inspect", { socketPath: node.socketPath }, 20_000)
+    : await executeNodeCommand(node, command, { timeout: 12_000 });
   const [version = "", raw = ""] = result.stdout.split("---BIRDBOX---");
   return {
     nodeId: node.id,
@@ -233,6 +236,30 @@ export async function inspectOspfRuntime(nodeInput: unknown, protocolNames: { v2
   const node = normalizeNode(nodeInput);
   const v2 = normalizeId(protocolNames.v2, "OSPFv2 协议名称");
   const v3 = normalizeId(protocolNames.v3, "OSPFv3 协议名称");
+  if (node.transport === "agent") {
+    const result = await executeNodeRpc(node, "bird.ospf", {
+      socketPath: node.socketPath,
+      v2,
+      v3,
+    }, 30_000);
+    const [neighbors = "", v2count = "", v2routes = "", v3count = "", v3routes = "", interfaces = ""] = result.stdout.split(/---BIRDBOX-OSPF-(?:V2-COUNT|V2-ROUTES|V3-COUNT|V3-ROUTES|INTERFACES)---/);
+    return {
+      reachable: result.ok,
+      error: result.ok ? null : (result.stderr || "节点不可达"),
+      v2: { ...parseOspfSectionByTable(neighbors, v2), routes: parseOspfRouteCount(v2count) ?? parseRouteDetails(v2routes, "ipv4").routes.length },
+      v3: { ...parseOspfSectionByTable(neighbors, v3), routes: parseOspfRouteCount(v3count) ?? parseRouteDetails(v3routes, "ipv6").routes.length },
+      neighbors: [
+        ...parseOspfNeighborDetails(neighbors, v2, "ospfv2"),
+        ...parseOspfNeighborDetails(neighbors, v3, "ospfv3"),
+      ],
+      routes: [
+        ...parseRouteDetails(v2routes, "ipv4").routes.map((route) => ({ ...route, version: "ospfv2" as const })),
+        ...parseRouteDetails(v3routes, "ipv6").routes.map((route) => ({ ...route, version: "ospfv3" as const })),
+      ],
+      routesTruncated: parseRouteDetails(v2routes, "ipv4").truncated || parseRouteDetails(v3routes, "ipv6").truncated,
+      interfaces: interfaces.split(/\r?\n/).map((item) => item.trim()).filter((item) => /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(item)),
+    };
+  }
   const command = [
     `neighbors=$(birdc -s '${node.socketPath}' 'show ospf neighbors' 2>&1 || true)`,
     `v2count=$(birdc -s '${node.socketPath}' 'show route protocol ${v2} count' 2>&1 || true)`,
@@ -268,6 +295,13 @@ export async function inspectOspfRuntime(nodeInput: unknown, protocolNames: { v2
 export async function checkIncludeNodeAccess(nodeInput: unknown): Promise<NodeCommandResult> {
   const node = normalizeNode(nodeInput);
   assertValidation(node.deploymentMode === "include", "只有 Include 节点需要执行接入检查");
+  if (node.transport === "agent") {
+    return executeNodeRpc(node, "bird.access", {
+      mainConfigPath: node.mainConfigPath,
+      generatedConfigPath: node.generatedConfigPath,
+      socketPath: node.socketPath,
+    }, 20_000);
+  }
   const directory = path.posix.dirname(node.generatedConfigPath);
   const command = [
     "set -eu",
@@ -299,6 +333,19 @@ export async function inspectProtocolRoutes(
   const limit = options.limit ?? 200;
   assertValidation(Number.isSafeInteger(limit) && limit >= 1 && limit <= 1000, "路由明细数量限制不合法");
   const table = normalizeOptionalName(options.table, "Channel 路由表名称") ?? (family === "ipv4" ? "master4" : "master6");
+  if (node.transport === "agent") {
+    const result = await executeNodeRpc(node, "bird.routes", {
+      socketPath: node.socketPath,
+      table,
+      protocolName,
+      direction,
+    }, 25_000);
+    return {
+      ok: result.ok,
+      ...parseRouteDetails(result.stdout, family, limit),
+      error: result.ok ? null : (result.stderr || result.stdout || "无法读取 BIRD 路由明细"),
+    };
+  }
   const routeSelector = direction === "import" ? `protocol ${protocolName}` : `export ${protocolName}`;
   const query = `show route table ${table} ${routeSelector} all`;
   const command = `
@@ -349,6 +396,24 @@ export async function inspectRoutePath(nodeInput: unknown, targetInput: unknown)
   assertValidation(net.isIP(baseTarget) !== 0, "目标 IP 地址不合法");
   const family: AddressFamily = net.isIP(baseTarget) === 4 ? "ipv4" : "ipv6";
   const table = family === "ipv4" ? "master4" : "master6";
+  if (node.transport === "agent") {
+    const result = await executeNodeRpc(node, "bird.routes", {
+      socketPath: node.socketPath,
+      table,
+      target,
+    }, 20_000);
+    const parsed = parseRoutePath(result.stdout, family, 16);
+    return {
+      reachable: result.ok && parsed.routes.length > 0,
+      error: result.ok ? (parsed.routes.length ? null : "路由表中没有到达该目标 IP 的路径") : (result.stderr || result.stdout || "无法读取 BIRD 路由"),
+      target,
+      family,
+      table,
+      routes: parsed.routes,
+      truncated: parsed.truncated,
+      limit: parsed.limit,
+    };
+  }
   const result = await executeNodeCommand(
     node,
     `birdc -s '${node.socketPath}' 'show route table ${table} for ${target} all' 2>&1`,
@@ -450,6 +515,19 @@ function resourceRemovalCommands(bundle: NodeConfigBundle, baseDirectory: string
 export async function stageAndValidate(nodeInput: unknown, bundleInput: string | NodeConfigBundle): Promise<NodeCommandResult> {
   const node = normalizeNode(nodeInput);
   const bundle = validateBundle(bundleInput);
+  if (node.transport === "agent") {
+    const baseDirectory = node.deploymentMode === "include" ? path.posix.dirname(node.generatedConfigPath) : RUNTIME.baseDir;
+    return executeNodeRpc(node, "bird.stage", {
+      deploymentMode: node.deploymentMode,
+      mainConfigPath: node.mainConfigPath,
+      generatedConfigPath: node.generatedConfigPath,
+      socketPath: node.socketPath,
+      baseDirectory,
+      config: bundle.main,
+      resources: bundle.resources,
+      removedResources: bundle.removedResources ?? [],
+    }, 60_000);
+  }
   const config = bundle.main;
   if (node.deploymentMode === "include") {
     const activePath = node.generatedConfigPath;
@@ -516,6 +594,19 @@ export async function stageAndValidate(nodeInput: unknown, bundleInput: string |
 export async function applyStagedConfig(nodeInput: unknown, bundleInput: string | NodeConfigBundle = ""): Promise<NodeCommandResult> {
   const node = normalizeNode(nodeInput);
   const bundle = validateBundle(bundleInput);
+  if (node.transport === "agent") {
+    const baseDirectory = node.deploymentMode === "include" ? path.posix.dirname(node.generatedConfigPath) : RUNTIME.baseDir;
+    return executeNodeRpc(node, "bird.apply", {
+      deploymentMode: node.deploymentMode,
+      mainConfigPath: node.mainConfigPath,
+      generatedConfigPath: node.generatedConfigPath,
+      socketPath: node.socketPath,
+      baseDirectory,
+      config: bundle.main,
+      resources: bundle.resources,
+      removedResources: bundle.removedResources ?? [],
+    }, 60_000);
+  }
   if (node.deploymentMode === "include") {
     const activePath = node.generatedConfigPath;
     const directory = path.posix.dirname(activePath);
@@ -570,6 +661,19 @@ export async function applyStagedConfig(nodeInput: unknown, bundleInput: string 
 export async function rollbackNode(nodeInput: unknown, bundleInput: string | NodeConfigBundle = ""): Promise<NodeCommandResult> {
   const node = normalizeNode(nodeInput);
   const bundle = validateBundle(bundleInput);
+  if (node.transport === "agent") {
+    const baseDirectory = node.deploymentMode === "include" ? path.posix.dirname(node.generatedConfigPath) : RUNTIME.baseDir;
+    return executeNodeRpc(node, "bird.rollback", {
+      deploymentMode: node.deploymentMode,
+      mainConfigPath: node.mainConfigPath,
+      generatedConfigPath: node.generatedConfigPath,
+      socketPath: node.socketPath,
+      baseDirectory,
+      config: bundle.main,
+      resources: bundle.resources,
+      removedResources: bundle.removedResources ?? [],
+    }, 60_000);
+  }
   if (node.deploymentMode === "include") {
     const activePath = node.generatedConfigPath;
     const rollbackLink = `${activePath}.rollback`;
@@ -599,6 +703,13 @@ export async function setProtocolState(nodeInput: unknown, protocolNameInput: un
   const node = normalizeNode(nodeInput);
   const protocolName = normalizeId(protocolNameInput, "BGP 协议名称");
   assertValidation(typeof enabled === "boolean", "BGP 协议状态不合法");
+  if (node.transport === "agent") {
+    return executeNodeRpc(node, "bird.protocol_state", {
+      socketPath: node.socketPath,
+      protocolName,
+      enabled,
+    }, 15_000);
+  }
   const command = `${enabled ? "enable" : "disable"} ${protocolName}`;
   return executeNodeCommand(node, `birdc -s '${node.socketPath}' '${command}'`, { timeout: 10_000 });
 }

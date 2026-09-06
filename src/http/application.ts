@@ -104,8 +104,10 @@ async function serveStatic(
 export async function createHttpApplication(options: HttpApplicationOptions) {
   const app = Fastify({
     bodyLimit: 128 * 1024,
-    requestTimeout: 30000,
-    connectionTimeout: 15000,
+    // Agent task polling may wait up to 30 seconds. Keep both timers above
+    // that window so idle outbound agents are not disconnected by the server.
+    requestTimeout: 60000,
+    connectionTimeout: 60000,
     keepAliveTimeout: 5000,
     maxRequestsPerSocket: 0,
     logger: false,
