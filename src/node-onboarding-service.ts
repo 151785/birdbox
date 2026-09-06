@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 import type { ChangeEvent, NodeOnboardingRpkiRequirement, NodeRuntime } from "../packages/contracts/src/api.js";
@@ -11,6 +12,7 @@ import {
   normalizeNode,
   renderBirdConfig,
   sourcePolicyManagedRules,
+  sourcePolicyManagedRulesForNode,
   executeNodeRpc,
   rollbackNode,
   stageAndValidate,
@@ -61,6 +63,15 @@ interface NodeOnboardingServiceOptions {
   agentBroker?: AgentBroker;
   agentControllerUrl?: string;
 }
+
+interface ScriptDelivery {
+  script: string;
+  expiresAt: number;
+  downloads: number;
+}
+
+const SCRIPT_DELIVERY_TTL_MS = 15 * 60 * 1000;
+const SCRIPT_DELIVERY_MAX_DOWNLOADS = 3;
 
 function normalizeSshNode(inputValue: unknown): ManagedNode {
   const input = record(inputValue, "节点参数不能为空");
@@ -580,7 +591,7 @@ function agentSetupScript(node: ManagedAgentNode, controllerUrl: string, token: 
     "TMP=/usr/local/bin/birdbox-agent.tmp.$$", "AGENT_ARCH=$(uname -m)", "case \"$AGENT_ARCH\" in x86_64) AGENT_ARCH=amd64;; aarch64) AGENT_ARCH=arm64;; armv7l) AGENT_ARCH=arm;; mips) AGENT_ARCH=mips;; mipsel) AGENT_ARCH=mipsle;; mips64*) AGENT_ARCH=mips64;; riscv64) AGENT_ARCH=riscv64;; *) echo \"不支持的 Agent 架构：$AGENT_ARCH\" >&2; exit 1;; esac", `AGENT_URL=${shellSingleQuote(`${baseUrl}/api/agent/releases/latest/download`)}?arch=$AGENT_ARCH`, `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 "$AGENT_URL" -o "$TMP"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$TMP" "$AGENT_URL"; else echo '缺少 curl 或 wget' >&2; exit 1; fi`,
     "chmod 0755 \"$TMP\"; mv -f \"$TMP\" /usr/local/bin/birdbox-agent", `MAIN_CONFIG=${shellSingleQuote(node.mainConfigPath)}`, `GENERATED_CONFIG=${shellSingleQuote(node.generatedConfigPath)}`, `test -f "$MAIN_CONFIG" || { echo "主配置不存在：$MAIN_CONFIG" >&2; exit 1; }`, `mkdir -p "$(dirname "$GENERATED_CONFIG")"`, `test -e "$GENERATED_CONFIG" || : > "$GENERATED_CONFIG"`, `grep -Fqx -- ${shellSingleQuote(includeLine)} "$MAIN_CONFIG" || printf '\\n%s\\n' ${shellSingleQuote(includeLine)} >> "$MAIN_CONFIG"`, "command -v birdc >/dev/null 2>&1 && birdc -s "+shellSingleQuote(node.socketPath)+" 'configure check' && birdc -s "+shellSingleQuote(node.socketPath)+" configure || true", "cat > /etc/birdbox/agent.env <<'BIRDBOX_AGENT_ENV'", env, "BIRDBOX_AGENT_ENV", "chmod 0600 /etc/birdbox/agent.env",
     "if command -v systemctl >/dev/null 2>&1 && [ ! -r /etc/openwrt_release ]; then", "  cat > /etc/systemd/system/birdbox-agent.service <<'BIRDBOX_AGENT_UNIT'", "[Unit]", "Description=Birdbox Agent", "After=network-online.target", "[Service]", "EnvironmentFile=/etc/birdbox/agent.env", "ExecStart=/usr/local/bin/birdbox-agent", "Restart=always", "RestartSec=5", "User=root", "[Install]", "WantedBy=multi-user.target", "BIRDBOX_AGENT_UNIT", "  systemctl daemon-reload; systemctl enable --now birdbox-agent", "else",
-    "  cat > /etc/init.d/birdbox-agent <<'BIRDBOX_PROCD'", "#!/bin/sh /etc/rc.common", "START=95", "USE_PROCD=1", `start_service() { . /etc/birdbox/agent.env; procd_open_instance; procd_set_param command /usr/local/bin/birdbox-agent; procd_set_param env BIRDBOX_CONTROLLER_URL="$BIRDBOX_CONTROLLER_URL" BIRDBOX_NODE_ID="$BIRDBOX_NODE_ID" BIRDBOX_AGENT_TOKEN="$BIRDBOX_AGENT_TOKEN"; procd_set_param respawn; procd_close_instance; }`, "BIRDBOX_PROCD", "  chmod 0755 /etc/init.d/birdbox-agent; /etc/init.d/birdbox-agent enable; /etc/init.d/birdbox-agent restart", "fi", "echo 'Birdbox Agent 安装完成，等待主控注册'",
+    "  cat > /etc/init.d/birdbox-agent <<'BIRDBOX_PROCD'", "#!/bin/sh /etc/rc.common", "START=95", "USE_PROCD=1", `start_service() { . /etc/birdbox/agent.env; procd_open_instance; procd_set_param command /usr/local/bin/birdbox-agent; procd_set_param env BIRDBOX_CONTROLLER_URL="$BIRDBOX_CONTROLLER_URL" BIRDBOX_NODE_ID="$BIRDBOX_NODE_ID" BIRDBOX_AGENT_TOKEN="$BIRDBOX_AGENT_TOKEN"; procd_set_param respawn; procd_close_instance; }`, "BIRDBOX_PROCD", "  chmod 0755 /etc/init.d/birdbox-agent", "  /etc/init.d/birdbox-agent enable", "  if /etc/init.d/birdbox-agent running >/dev/null 2>&1; then /etc/init.d/birdbox-agent restart; else /etc/init.d/birdbox-agent start; fi", "  AGENT_RUNNING=0", "  ATTEMPT=0", "  while [ \"$ATTEMPT\" -lt 10 ]; do", "    if /etc/init.d/birdbox-agent running >/dev/null 2>&1; then AGENT_RUNNING=1; break; fi", "    ATTEMPT=$((ATTEMPT + 1)); sleep 1", "  done", "  [ \"$AGENT_RUNNING\" -eq 1 ] || { echo 'Birdbox Agent 启动失败，请执行 /etc/init.d/birdbox-agent status 和 logread 查看原因' >&2; exit 1; }", "fi", "echo 'Birdbox Agent 已启动，等待主控注册'",
   ];
   const installIndex = lines.findIndex((line) => line.startsWith("chmod 0755"));
   lines.splice(installIndex < 0 ? lines.length : installIndex, 0,
@@ -646,9 +657,44 @@ async function verifyOnboardingNode(
 
 export class NodeOnboardingService {
   readonly #options: NodeOnboardingServiceOptions;
+  readonly #scriptDeliveries = new Map<string, ScriptDelivery>();
+  readonly #scriptDeliveryCleanupTimer: ReturnType<typeof setInterval>;
 
   constructor(options: NodeOnboardingServiceOptions) {
     this.#options = options;
+    this.#scriptDeliveryCleanupTimer = setInterval(() => this.#cleanupScriptDeliveries(), 60_000);
+    this.#scriptDeliveryCleanupTimer.unref?.();
+  }
+
+  #cleanupScriptDeliveries(now = Date.now()): void {
+    for (const [token, delivery] of this.#scriptDeliveries) {
+      if (delivery.expiresAt <= now || delivery.downloads >= SCRIPT_DELIVERY_MAX_DOWNLOADS) this.#scriptDeliveries.delete(token);
+    }
+  }
+
+  #publishScript(script: string): string {
+    const now = Date.now();
+    this.#cleanupScriptDeliveries(now);
+    while (this.#scriptDeliveries.size >= 256) {
+      const oldest = this.#scriptDeliveries.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.#scriptDeliveries.delete(oldest);
+    }
+    const token = randomBytes(24).toString("base64url");
+    this.#scriptDeliveries.set(token, { script, expiresAt: now + SCRIPT_DELIVERY_TTL_MS, downloads: 0 });
+    const baseUrl = (this.#options.agentControllerUrl ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+    return `${baseUrl}/api/nodes/setup-script/${token}`;
+  }
+
+  async getSetupScript(deliveryToken: string): Promise<string> {
+    const delivery = this.#scriptDeliveries.get(deliveryToken);
+    if (!delivery || delivery.expiresAt <= Date.now() || delivery.downloads >= SCRIPT_DELIVERY_MAX_DOWNLOADS) {
+      this.#scriptDeliveries.delete(deliveryToken);
+      fail(404, "准备脚本不存在或已过期");
+    }
+    delivery.downloads += 1;
+    if (delivery.downloads >= SCRIPT_DELIVERY_MAX_DOWNLOADS) this.#scriptDeliveries.delete(deliveryToken);
+    return delivery.script;
   }
 
   async createSetupScript(body: Record<string, unknown>) {
@@ -663,13 +709,16 @@ export class NodeOnboardingService {
       if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
       const token = await this.#options.agentBroker.issueToken(node.id);
       const script = agentSetupScript(node, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+      const setupScriptUrl = this.#publishScript(script.script);
       logger.info("节点 Agent 准备脚本已生成", { nodeId: node.id });
-      return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
+      return { status: 200, payload: { ...script, setupScriptUrl, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
     }
+    const script = nodeSetupScript(node, this.#options.controllerPublicKey(), rpkiRequirements);
     const payload = {
       status: 200,
       payload: {
-        ...nodeSetupScript(node, this.#options.controllerPublicKey(), rpkiRequirements),
+        ...script,
+        setupScriptUrl: this.#publishScript(script.script),
         publicKey: this.#options.controllerPublicKey(),
         rpkiRequirements,
       },
@@ -687,8 +736,9 @@ export class NodeOnboardingService {
     const token = await this.#options.agentBroker.issueToken(node.id);
     const rpkiRequirements = globalRpkiFileRequirements(inventory);
     const script = agentSetupScript(agentNode, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+    const setupScriptUrl = this.#publishScript(script.script);
     logger.info("节点 Agent 升级脚本已生成", { nodeId });
-    return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
+    return { status: 200, payload: { ...script, setupScriptUrl, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
   }
 
   async promoteToAgent(nodeId: string) {
@@ -700,8 +750,12 @@ export class NodeOnboardingService {
     if (previous.transport !== "ssh") fail(409, "只有 SSH 节点可以切换到 Agent");
     if (!this.#options.agentBroker.status(nodeId)?.connected) fail(409, "Agent 尚未注册，不能切换管理方式");
     const candidate = normalizeAgentNode({ ...previous, transport: "agent", sshHost: null, sshPort: null, sshUser: null, sshIdentity: "default", deploymentMode: "include" }, nodeId);
-    const sourceRules = sourcePolicyManagedRules(current.sourcePolicies
-      .filter((resource) => resource.enabled && resourceAppliesToNode(resource, nodeId)))
+    const activeSourcePolicies = current.sourcePolicies.filter((resource) => resource.enabled && resourceAppliesToNode(resource, nodeId));
+    // Remove rules that the legacy SSH node could have received, including
+    // local-gateway rules from older versions, then re-add only valid Agent rules.
+    const managedSourceRules = sourcePolicyManagedRules(activeSourcePolicies)
+      .map(({ priority, source, destination, table, kind }) => ({ priority, source, destination, table, kind }));
+    const sourceRules = sourcePolicyManagedRulesForNode(activeSourcePolicies, candidate)
       .map(({ priority, source, destination, table, kind }) => ({ priority, source, destination, table, kind }));
     const { state, deployment } = await this.#options.deploymentService.mutateAndApply((draft) => {
       const index = draft.nodes.findIndex((item) => item.id === nodeId);
@@ -710,13 +764,13 @@ export class NodeOnboardingService {
       return candidate;
     }, () => [nodeId], {
       apply: async (node) => {
-        if (!sourceRules.length) return;
-        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: sourceRules, rules: sourceRules }, 60_000);
+        if (!managedSourceRules.length && !sourceRules.length) return;
+        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: managedSourceRules, rules: sourceRules }, 60_000);
         if (!result.ok) fail(502, result.stderr || result.stdout || `${node.name} 的旧系统规则接管失败`);
       },
       rollback: async (node) => {
-        if (!sourceRules.length) return;
-        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: sourceRules, rules: [] }, 60_000);
+        if (!managedSourceRules.length && !sourceRules.length) return;
+        const result = await executeNodeRpc(node, "network.ip_rules", { removeRules: sourceRules, rules: managedSourceRules }, 60_000);
         if (!result.ok) fail(502, result.stderr || result.stdout || `${node.name} 的系统规则接管回滚失败`);
       },
     });

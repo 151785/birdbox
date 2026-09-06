@@ -20,6 +20,8 @@ import {
   renderSourcePolicyEgress,
   sourcePolicyGatewayConflicts,
   sourcePolicyManagedRules,
+  sourcePolicyManagedRulesForNode,
+  sourcePolicyForNode,
   sourcePolicyRules,
   sourcePolicyManualPlan,
   stageAndValidate,
@@ -303,15 +305,17 @@ export function createResourceApplicationService(
         if (!define || define.type !== "cidr4") fail(409, `源地址出口映射引用的 Define ${defineId} 不可用`);
         return define.name;
       }) ?? [];
-      const nodeManagedRules = sourcePolicyManagedRules(
+      const nodeManagedRules = sourcePolicyManagedRulesForNode(
         state.sourcePolicies.filter((item) => item.enabled && resourceAppliesToNode(item, node.id)),
+        node,
       );
+      const nodeScopedSourcePolicy = sourcePolicy ? sourcePolicyForNode(sourcePolicy, node) : null;
       return sourcePolicyManualPlan(
         node,
         current,
         previous,
         operation,
-        sourcePolicy ? renderSourcePolicyEgress(sourcePolicy, internalDefineNames) : "",
+        nodeScopedSourcePolicy ? renderSourcePolicyEgress(nodeScopedSourcePolicy, internalDefineNames) : "",
         nodeManagedRules,
       );
     });
@@ -363,7 +367,7 @@ export function createResourceApplicationService(
     previous: SourcePolicyEgress | null,
   ): { removeRules: SourcePolicyRuleInstruction[]; rules: SourcePolicyRuleInstruction[] } {
     const active = inventory.sourcePolicies.filter((item) => item.enabled && resourceAppliesToNode(item, node.id));
-    const rules = sourcePolicyManagedRules(active);
+    const rules = sourcePolicyManagedRulesForNode(active, node);
     const removeRules = previous && previous.enabled && resourceAppliesToNode(previous, node.id)
       ? sourcePolicyManagedRules([previous])
       : [];
@@ -382,6 +386,7 @@ export function createResourceApplicationService(
 
   return {
     createNodeSetupScript: (body) => options.nodeOnboarding.createSetupScript(body),
+    getNodeSetupScript: (deliveryToken) => options.nodeOnboarding.getSetupScript(deliveryToken),
     createNodeAgentUpgradeScript: (nodeId) => options.nodeOnboarding.createAgentUpgradeScript(nodeId),
     promoteNodeToAgent: (nodeId) => options.nodeOnboarding.promoteToAgent(nodeId),
     testNode: (body) => options.nodeOnboarding.test(body),

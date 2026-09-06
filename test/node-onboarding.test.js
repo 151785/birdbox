@@ -125,12 +125,22 @@ test("defaults new onboarding to an Agent installer with valid shell syntax", as
   assert.equal(response.status, 200);
   assert.equal(response.payload.nodeId, "agent_test");
   assert.match(response.payload.script, /birdbox-agent/);
+  assert.match(response.payload.setupScriptUrl, /^https:\/\/controller\.example\/api\/nodes\/setup-script\/[A-Za-z0-9_-]{32,}$/);
   assert.match(response.payload.script, /systemd|openwrt|init\.d/);
   assert.ok(response.payload.script.indexOf("CHECKSUM_URL") < response.payload.script.indexOf("mv -f \"$TMP\""));
   assert.ok(response.payload.script.includes("EXPECTED=$(sed 's/[[:space:]]//g' < \"$CHECKSUM_TMP\")"));
   assert.doesNotMatch(response.payload.script, /tr -d '\[:space:\]'/);
+  assert.match(response.payload.script, /if \/etc\/init\.d\/birdbox-agent running/);
+  assert.match(response.payload.script, /then \/etc\/init\.d\/birdbox-agent restart; else \/etc\/init\.d\/birdbox-agent start; fi/);
+  assert.match(response.payload.script, /Birdbox Agent 已启动，等待主控注册/);
+  assert.match(response.payload.script, /Birdbox Agent 启动失败，请执行 \/etc\/init\.d\/birdbox-agent status 和 logread 查看原因/);
   const syntax = await shellSyntax(response.payload.script);
   assert.equal(syntax.code, 0, syntax.stderr);
+  const deliveryToken = response.payload.setupScriptUrl.split("/").pop();
+  assert.equal(await service.getSetupScript(deliveryToken), response.payload.script);
+  assert.equal(await service.getSetupScript(deliveryToken), response.payload.script);
+  assert.equal(await service.getSetupScript(deliveryToken), response.payload.script);
+  await assert.rejects(() => service.getSetupScript(deliveryToken), /准备脚本不存在或已过期/);
 });
 
 test("creates an Agent node after registration without requiring inbound SSH", async () => {

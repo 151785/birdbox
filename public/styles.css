@@ -435,6 +435,8 @@ form.validation-attempted .channel-enable-row.field-invalid h3 { color: var(--re
 .node-onboarding-actions { justify-content: flex-start; margin-top: 11px; }
 .node-setup-guide { margin-top: 12px; }
 .setup-guide-heading, .setup-include { color: var(--muted); font-size: 11px; }
+.setup-command { margin-bottom: 10px; }
+.setup-command code { display: block; max-height: 110px; overflow: auto; margin-top: 7px; padding: 10px; color: var(--code-text); background: var(--code); border-radius: 5px; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .node-setup-guide pre { max-height: 240px; overflow: auto; margin: 7px 0 10px; padding: 11px; color: var(--code-text); background: var(--code); border-radius: 5px; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
 .setup-include code { min-width: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 11px; }
 .policy-block { min-width: 0; padding: 15px 0 1px; border-top: 1px solid var(--line); }

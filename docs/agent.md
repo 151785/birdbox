@@ -5,11 +5,13 @@ Agent 是受管节点的主动连接模式。节点上的 `birdbox-agent` 以 ro
 ## 新建 Agent 节点
 
 1. 在节点管理中点击“添加节点”，填写节点名称、Router ID、BIRD 主配置、生成配置和 Socket 路径。新建节点默认且只能使用 Agent；页面不再提供 SSH 新建选项。
-2. 点击“生成准备脚本”，在目标 Linux/OpenWrt 节点以 root 执行完整脚本。
+2. 点击“生成准备脚本”，复制页面提供的一键命令并在目标 Linux/OpenWrt 节点以 root 执行；命令会从主控短期 URL 下载脚本。目标节点无法访问主控时，也可以复制下方完整脚本离线执行。
 3. 脚本会按节点架构下载并校验 SHA-256 后安装 Agent、生成 systemd unit 或 OpenWrt procd 服务、写入 `/etc/birdbox/agent.env`，并为 BIRD 增加生成配置 include。
 4. 等待 Agent 注册后点击“测试连接”，确认通过后保存节点。
 
 主控生成脚本时使用 `BIRDBOX_PUBLIC_URL` 作为节点回连地址。生产环境必须把它设置为节点可达的主控 URL，不能使用监听地址 `0.0.0.0`。
+
+一键命令使用 `curl` 或 `wget` 配合 POSIX `sh`，兼容默认没有 `bash` 的 OpenWrt。脚本分发 URL 使用随机令牌，15 分钟后失效且最多下载 3 次；不要把 URL 发布到工单、聊天记录或日志中，失效后从页面重新生成即可。
 
 ## 旧 SSH 节点升级
 

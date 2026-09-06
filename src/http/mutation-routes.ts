@@ -48,6 +48,11 @@ function validId(value: string): string {
   return value;
 }
 
+function validScriptDeliveryToken(value: string): string {
+  if (!/^[A-Za-z0-9_-]{32,}$/.test(value)) throw routeError(404, "准备脚本不存在或已过期");
+  return value;
+}
+
 function policyCollection(value: string): PolicyCollection {
   if (value === "defines" || value === "functions" || value === "filters") return value;
   throw routeError(404, "接口不存在");
@@ -55,6 +60,7 @@ function policyCollection(value: string): PolicyCollection {
 
 export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (app, options) => {
   app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "GET" && request.url.startsWith("/api/nodes/setup-script/")) return;
     if (await options.authStore.isAuthenticated(requestSessionToken(request))) return;
     return reply.code(401).headers({
       "content-type": "application/json; charset=utf-8",
@@ -63,6 +69,15 @@ export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (
     }).send({ error: "请先登录", code: "AUTH_REQUIRED" });
   });
 
+  app.get<{ Params: { deliveryToken: string } }>("/api/nodes/setup-script/:deliveryToken", async (request, reply) => {
+    const script = await options.service.getNodeSetupScript(validScriptDeliveryToken(request.params.deliveryToken));
+    return reply.code(200).headers({
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store, max-age=0",
+      "content-disposition": "inline; filename=birdbox-node-setup.sh",
+      "x-content-type-options": "nosniff",
+    }).send(script);
+  });
   app.post("/api/nodes/setup-script", async (request, reply) => jsonReply(reply, await options.service.createNodeSetupScript(jsonBody(request))));
   app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/agent-upgrade-script", async (request, reply) => jsonReply(reply, await options.service.createNodeAgentUpgradeScript(validId(request.params.nodeId))));
   app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/promote-agent", async (request, reply) => jsonReply(reply, await options.service.promoteNodeToAgent(validId(request.params.nodeId))));

@@ -6,12 +6,31 @@
 ## 发布约定
 
 `package.json` 的 `version` 是默认发布 tag。版本 tag 必须是 Docker 合法的
-tag 字符串，例如 `0.02a`、`0.03a` 或 `2026.07.31`。预发布版本不要覆盖
-`latest`；只有明确的稳定版本才可以额外创建 `latest`。
+tag 字符串，例如 `0.02a`、`0.03a` 或 `2026.07.31`。当前发布流程每次都将
+该版本同步到 `latest`。
 
 一个 tag 发布后视为不可变版本。修复同一版本时应递增版本号，而不是覆盖
 已有 tag。部署端也可以把 `BIRDBOX_IMAGE_TAG` 写成
 `<tag>@sha256:<digest>` 来锁定镜像内容。
+
+## 一键发布脚本
+
+仓库根目录执行以下命令即可完成版本读取、依赖安装、测试、构建、本机 amd64
+冒烟测试、Agent 文件及下载摘要校验、多架构推送，以及 `latest` 同步：
+
+```bash
+./scripts/docker-release.sh
+```
+
+脚本默认发布 `package.json` 当前版本到 `pmman/birdbox:<version>`，并推送
+`linux/amd64,linux/arm64`。工作区必须干净，已有版本 tag 默认拒绝覆盖。仅在
+明确需要替换版本 tag 时使用 `--overwrite-version`；调试时可使用
+`--skip-tests`、`--skip-smoke` 或 `--dry-run`。完整参数和环境变量说明可用
+以下命令查看：
+
+```bash
+./scripts/docker-release.sh --help
+```
 
 ## 发布前检查
 

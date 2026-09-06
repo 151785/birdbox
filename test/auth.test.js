@@ -141,6 +141,12 @@ test("supports password setup and manages multiple active admin sessions", async
     }),
   });
   assert.equal(setupScript.status, 200);
+  assert.match(setupScript.body.setupScriptUrl, /^http:\/\/127\.0\.0\.1:\d+\/api\/nodes\/setup-script\/[A-Za-z0-9_-]{32,}$/);
+  const distributedScriptPath = new URL(setupScript.body.setupScriptUrl).pathname;
+  const distributedScript = await fetch(`http://127.0.0.1:${port}${distributedScriptPath}`);
+  assert.equal(distributedScript.status, 200);
+  assert.match(await distributedScript.text(), /#!/);
+  assert.match(distributedScript.headers.get("content-type"), /text\/plain/);
   assert.match(setupScript.body.script, /不能是符号链接/);
   assert.match(setupScript.body.script, /grep -Fx -- "\$KEY_LINE"/);
   assert.match(setupScript.body.script, /useradd --system/);

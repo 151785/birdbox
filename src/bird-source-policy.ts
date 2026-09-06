@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import net from "node:net";
 
 import type {
   ManagedNode,
@@ -274,6 +275,29 @@ export function sourcePolicyManagedRules(resources: readonly SourcePolicyEgress[
   ]);
 }
 
+/**
+ * The gateway node must keep using its normal underlay route. Installing a
+ * source rule on that node would make recursive gateway resolution point back
+ * at the node itself and can shadow an existing local NAT/masquerade setup.
+ */
+export function sourcePolicyForNode(resource: SourcePolicyEgress, node: ManagedNode): SourcePolicyEgress | null {
+  const localAddress = node.igpAddress && net.isIPv4(node.igpAddress) ? node.igpAddress : null;
+  const groups = localAddress
+    ? resource.groups.filter((group) => group.egressAddress !== localAddress)
+    : [...resource.groups];
+  return groups.length ? { ...resource, groups } : null;
+}
+
+export function sourcePolicyManagedRulesForNode(
+  resources: readonly SourcePolicyEgress[],
+  node: ManagedNode,
+): SourcePolicyRuleInstruction[] {
+  return sourcePolicyManagedRules(resources.flatMap((resource) => {
+    const scoped = sourcePolicyForNode(resource, node);
+    return scoped ? [scoped] : [];
+  }));
+}
+
 export interface SourcePolicyGatewayConflict {
   gatewayResourceId: string;
   gatewayResourceLabel: string;
@@ -489,8 +513,9 @@ export function sourcePolicyManualPlan(
   birdConfig: string,
   nodeManagedRules: readonly SourcePolicyRuleInstruction[] | null = null,
 ): SourcePolicyManualPlan {
-  const rules = current && current.enabled && resourceAppliesToNode(current, node.id) ? sourcePolicyRules(current) : [];
-  const gatewayRules = current && current.enabled && resourceAppliesToNode(current, node.id) ? sourcePolicyGatewayRules(current) : [];
+  const scopedCurrent = current && sourcePolicyForNode(current, node);
+  const rules = scopedCurrent && scopedCurrent.enabled && resourceAppliesToNode(scopedCurrent, node.id) ? sourcePolicyRules(scopedCurrent) : [];
+  const gatewayRules = scopedCurrent && scopedCurrent.enabled && resourceAppliesToNode(scopedCurrent, node.id) ? sourcePolicyGatewayRules(scopedCurrent) : [];
   // A disabled mapping never installs system rules, so it has nothing to clean up.
   const oldRules = previous?.enabled && resourceAppliesToNode(previous, node.id) ? sourcePolicyRules(previous) : [];
   const removeRules = oldRules;

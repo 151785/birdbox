@@ -6,8 +6,11 @@ import {
   normalizeSourcePolicyEgress,
   prepareSourcePolicyEgress,
   renderBirdConfig,
+  renderSourcePolicyEgress,
   sourcePolicyGatewayRules,
   sourcePolicyManagedRules,
+  sourcePolicyManagedRulesForNode,
+  sourcePolicyForNode,
   sourcePolicyManualPlan,
   sourcePolicyRules,
   validateInventory,
@@ -159,6 +162,49 @@ test("adds underlay exceptions for source-policy gateways and deduplicates share
   const plan = sourcePolicyManualPlan(local, current, null, "create", "");
   assert.match(plan.applyScript, /to '172\.20\.177\.36\/32' table main/);
   assert.match(plan.applyScript, /from '162\.141\.136\.139\/32' table 200/);
+});
+
+test("keeps local gateway nodes on their normal NAT/main route", () => {
+  const gatewayNode = { ...local, id: "ytix", igpAddress: "172.20.177.33" };
+  const upstreamNode = { ...local, id: "upstream", igpAddress: "172.20.177.34" };
+  const mapped = resource({
+    nodeIds: [gatewayNode.id, upstreamNode.id],
+    groups: [{
+      id: "ytix_gateway",
+      egressAddress: "172.20.177.33",
+      sources: ["172.20.177.9/32"],
+      kernelTable: 200,
+      ruleSlot: 0,
+    }],
+  });
+  assert.equal(sourcePolicyForNode(mapped, gatewayNode), null);
+  assert.deepEqual(sourcePolicyManagedRulesForNode([mapped], gatewayNode), []);
+  assert.equal(sourcePolicyManagedRulesForNode([mapped], upstreamNode).filter((rule) => rule.kind === "source").length, 1);
+  const gatewayPlan = sourcePolicyManualPlan(gatewayNode, mapped, null, "create", "");
+  assert.doesNotMatch(gatewayPlan.birdConfig, /protocol static bb_spe_/);
+  assert.doesNotMatch(gatewayPlan.applyScript ?? "", /from '172\.20\.177\.9\/32'/);
+});
+
+test("scopes mixed source-policy groups per node", () => {
+  const gatewayNode = { ...local, id: "ytix", igpAddress: "172.20.177.33" };
+  const remoteNode = { ...local, id: "remote", igpAddress: "172.20.177.34" };
+  const mapped = resource({
+    nodeIds: [gatewayNode.id, remoteNode.id],
+    groups: [
+      { id: "local_gateway", egressAddress: "172.20.177.33", sources: ["172.20.177.9/32"], kernelTable: 200, ruleSlot: 0 },
+      { id: "remote_gateway", egressAddress: "172.20.177.38", sources: ["82.47.33.189/32"], kernelTable: 201, ruleSlot: 1 },
+    ],
+  });
+  const localScoped = sourcePolicyForNode(mapped, gatewayNode);
+  assert.deepEqual(localScoped?.groups.map((group) => group.egressAddress), ["172.20.177.38"]);
+  const rendered = renderBirdConfig(gatewayNode, [], [], [], [], [], [], [], [mapped], []);
+  assert.doesNotMatch(rendered, /172\.20\.177\.33/);
+  assert.match(rendered, /172\.20\.177\.38/);
+  const localPlan = sourcePolicyManualPlan(gatewayNode, mapped, null, "create", renderSourcePolicyEgress(localScoped));
+  assert.doesNotMatch(localPlan.birdConfig, /172\.20\.177\.33/);
+  assert.match(localPlan.birdConfig, /172\.20\.177\.38/);
+  assert.doesNotMatch(localPlan.applyScript ?? "", /172\.20\.177\.9/);
+  assert.match(localPlan.applyScript ?? "", /82\.47\.33\.189/);
 });
 
 test("allows a legacy source CIDR that contains its configured gateway", () => {

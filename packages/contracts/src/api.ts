@@ -226,6 +226,8 @@ export interface NodeOnboardingRpkiRequirement {
 export interface NodeSetupScriptResponse {
   script: string;
   includeLine: string;
+  /** Short-lived capability URL for `bash <(curl -fsSL ...)` execution. */
+  setupScriptUrl?: string;
   publicKey: string;
   /** Returned only once for Agent onboarding; do not persist in inventory responses. */
   agentToken?: string;

@@ -30,6 +30,7 @@ const verified = ref(false);
 const onboardingStatus = ref("等待连接测试");
 const onboardingState = ref("");
 const setupScript = ref("");
+const setupScriptUrl = ref("");
 const includeLine = ref("");
 const onboardingAgentId = ref<string | null>(null);
 const cleanupNode = ref<ManagedNode | null>(null);
@@ -99,6 +100,7 @@ function resetDraft(node: ManagedNode | null): void {
   onboardingStatus.value = node ? "已接入" : "等待连接测试";
   onboardingState.value = node ? "ready" : "";
   setupScript.value = "";
+  setupScriptUrl.value = "";
   includeLine.value = "";
   onboardingAgentId.value = node?.id ?? null;
   if (form.value) clearFormValidation(form.value);
@@ -174,6 +176,7 @@ function changed(): void {
   onboardingStatus.value = "等待连接测试";
   onboardingState.value = "";
   setupScript.value = "";
+  setupScriptUrl.value = "";
   includeLine.value = "";
 }
 
@@ -188,6 +191,7 @@ async function generateScript(): Promise<void> {
       body: JSON.stringify(onboardingPayload()),
     });
     setupScript.value = result.script;
+    setupScriptUrl.value = result.setupScriptUrl ?? "";
     includeLine.value = result.includeLine;
     onboardingAgentId.value = result.nodeId ?? onboardingAgentId.value;
     onboardingStatus.value = "脚本已生成";
@@ -208,6 +212,7 @@ async function generateAgentUpgradeScript(): Promise<void> {
   try {
     const result = await api<NodeSetupScriptResponse>(`/api/nodes/${encodeURIComponent(nodeId)}/agent-upgrade-script`, { method: "POST" });
     setupScript.value = result.script;
+    setupScriptUrl.value = result.setupScriptUrl ?? "";
     includeLine.value = "Agent 将复用现有 BIRD 配置路径";
     onboardingStatus.value = "Agent 升级脚本已生成";
   } catch (error) {
@@ -256,9 +261,24 @@ async function testConnection(): Promise<void> {
 async function copyScript(): Promise<void> {
   try {
     await copyText(setupScript.value);
-    dispatchToast("准备脚本已复制", "success");
+    dispatchToast("完整准备脚本已复制", "success");
   } catch {
     dispatchToast("无法访问剪贴板，请手动选择脚本内容", "error");
+  }
+}
+
+function directSetupCommand(): string {
+  if (!setupScriptUrl.value) return setupScript.value;
+  const url = JSON.stringify(setupScriptUrl.value);
+  return `if command -v curl >/dev/null 2>&1; then curl -fsSL ${url} | sh; elif command -v wget >/dev/null 2>&1; then wget -qO- ${url} | sh; else echo '缺少 curl 或 wget' >&2; exit 1; fi`;
+}
+
+async function copyDirectSetupCommand(): Promise<void> {
+  try {
+    await copyText(directSetupCommand());
+    dispatchToast("一键执行命令已复制", "success");
+  } catch {
+    dispatchToast("无法访问剪贴板，请手动选择一键执行命令", "error");
   }
 }
 
@@ -387,7 +407,8 @@ onBeforeUnmount(() => {
             <button id="testNodeConnectionButton" class="secondary-button" type="button" :disabled="pending" @click="testConnection">测试连接</button>
           </div>
           <div v-if="setupScript" id="nodeSetupGuide" class="node-setup-guide">
-            <div class="setup-guide-heading"><span>在目标节点以 root 身份执行</span><button id="copyNodeSetupButton" class="compact-command" type="button" @click="copyScript">复制脚本</button></div>
+            <div class="setup-command"><div class="setup-guide-heading"><span>直接粘贴到目标节点 Shell（URL 15 分钟内有效，最多下载 3 次）</span><button id="copyNodeSetupCommandButton" class="compact-command" type="button" @click="copyDirectSetupCommand">复制执行命令</button></div><code id="nodeSetupCommand">{{ directSetupCommand() }}</code></div>
+            <div class="setup-guide-heading"><span>完整脚本（离线执行）</span><button id="copyNodeSetupButton" class="compact-command" type="button" @click="copyScript">复制完整脚本</button></div>
             <pre id="nodeSetupScript">{{ setupScript }}</pre>
             <div class="setup-include"><span>脚本将自动写入主配置</span><code id="nodeIncludeLine">{{ includeLine }}</code></div>
           </div>
@@ -396,7 +417,7 @@ onBeforeUnmount(() => {
           <div class="node-onboarding-head"><strong>升级为 Agent 管理</strong><span :class="onboardingState">{{ onboardingStatus }}</span></div>
           <p class="dialog-note">先生成并在节点上执行升级脚本，确认 Agent 已连接后，再点击切换。旧 SSH 配置在切换前不会改变。</p>
           <div class="node-onboarding-actions"><button class="secondary-button" type="button" :disabled="pending" @click="generateAgentUpgradeScript">生成升级脚本</button><button class="primary-button" type="button" :disabled="pending" @click="promoteToAgent">切换为 Agent</button></div>
-          <div v-if="setupScript" class="node-setup-guide"><div class="setup-guide-heading"><span>在目标节点以 root 身份执行</span><button class="compact-command" type="button" @click="copyScript">复制脚本</button></div><pre>{{ setupScript }}</pre></div>
+          <div v-if="setupScript" class="node-setup-guide"><div class="setup-command"><div class="setup-guide-heading"><span>直接粘贴到目标节点 Shell（URL 15 分钟内有效，最多下载 3 次）</span><button class="compact-command" type="button" @click="copyDirectSetupCommand">复制执行命令</button></div><code>{{ directSetupCommand() }}</code></div><div class="setup-guide-heading"><span>完整脚本（离线执行）</span><button class="compact-command" type="button" @click="copyScript">复制完整脚本</button></div><pre>{{ setupScript }}</pre></div>
         </section>
       </div>
       <div class="dialog-actions split-actions">

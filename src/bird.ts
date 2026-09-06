@@ -36,6 +36,8 @@ export {
   sourcePolicyGatewayRules,
   sourcePolicyGatewayConflicts,
   sourcePolicyManagedRules,
+  sourcePolicyManagedRulesForNode,
+  sourcePolicyForNode,
   sourcePolicyManualPlan,
   sourcePolicyNames,
   sourcePolicyRules,
