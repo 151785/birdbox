@@ -671,7 +671,7 @@ export class NodeOnboardingService {
     const inventory = await this.#options.store.read();
     const node = findNode(inventory, nodeId);
     if (node.transport !== "ssh") fail(409, "只有旧 SSH 节点可以生成 Agent 升级脚本");
-    const agentNode = normalizeAgentNode({ ...node, transport: "agent", id: node.id });
+    const agentNode = normalizeAgentNode({ ...node, transport: "agent", id: node.id }, node.id);
     const token = await this.#options.agentBroker.issueToken(node.id);
     const rpkiRequirements = globalRpkiFileRequirements(inventory);
     const script = agentSetupScript(agentNode, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);

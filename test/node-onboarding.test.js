@@ -152,6 +152,43 @@ test("creates an Agent node after registration without requiring inbound SSH", a
   assert.equal(created.payload.deployment.applied, false);
 });
 
+test("keeps the existing node ID in an Agent upgrade script", async () => {
+  const broker = new AgentBroker({ database: new MemoryDatabase() });
+  await broker.initialize();
+  const legacyNode = {
+    id: "legacy_upgrade_node",
+    name: "Legacy router",
+    kind: "managed-node",
+    transport: "ssh",
+    sshHost: "192.0.2.20",
+    sshPort: 22,
+    sshUser: "birdbox",
+    sshIdentity: "managed",
+    deploymentMode: "include",
+    mainConfigPath: "/etc/bird/bird.conf",
+    generatedConfigPath: "/var/lib/birdbox/generated.conf",
+    socketPath: "/run/bird/bird.ctl",
+    routerId: "192.0.2.20",
+    igpAddress: "192.0.2.20",
+    listenPort: 179,
+  };
+  const service = new NodeOnboardingService({
+    store: { read: async () => ({ ...inventoryWithRpki([]), nodes: [legacyNode] }) },
+    deploymentService: {},
+    withDeploymentLock: async (operation) => operation(),
+    controllerPublicKey: () => "",
+    makeId: () => "unused",
+    addEvent: () => ({ timestamp: "", level: "info", message: "", nodeId: null }),
+    getEvents: () => [],
+    agentBroker: broker,
+    agentControllerUrl: "https://controller.example",
+  });
+  const response = await service.createAgentUpgradeScript(legacyNode.id);
+  assert.equal(response.payload.nodeId, legacyNode.id);
+  assert.match(response.payload.script, /BIRDBOX_NODE_ID='legacy_upgrade_node'/);
+  assert.doesNotMatch(response.payload.script, /BIRDBOX_NODE_ID='node_onboarding'/);
+});
+
 test("maps a missing global RPKI file validation error to its resource and remedy", () => {
   const requirements = globalRpkiFileRequirements(inventoryWithRpki([globalFileRpki]));
   const raw = "Cannot open file /etc/bird/roa_dn42_v6.conf: No such file or directory";

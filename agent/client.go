@@ -282,9 +282,24 @@ func upgradeTask(t task, r result) result {
 		return r
 	}
 	if service != "" {
-		_ = exec.Command("systemctl", "restart", service).Run()
+		scheduleServiceRestart(service)
 	}
 	r.OK = true
 	r.Result = map[string]any{"version": t.Params["version"]}
 	return r
+}
+
+func scheduleServiceRestart(service string) {
+	// Return the upgrade result first. Restarting the current process inline
+	// would terminate it before it can POST the task result to the controller.
+	time.AfterFunc(5*time.Second, func() {
+		if _, err := exec.LookPath("systemctl"); err == nil {
+			if err := exec.Command("systemctl", "restart", service).Run(); err == nil {
+				return
+			}
+		}
+		if _, err := exec.LookPath("service"); err == nil {
+			_ = exec.Command("service", service, "restart").Run()
+		}
+	})
 }

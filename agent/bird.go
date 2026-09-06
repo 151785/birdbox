@@ -200,6 +200,10 @@ func runBirdc(parent context.Context, socket, command string) commandResult {
 	return runCommand(parent, "birdc", []string{"-s", socket, command}, 120*time.Second, 8*1024*1024)
 }
 
+func runBirdcVerbose(parent context.Context, socket, command string) commandResult {
+	return runCommand(parent, "birdc", []string{"-s", socket, "-v", command}, 120*time.Second, 8*1024*1024)
+}
+
 func capturePath(path string) (pathState, error) {
 	target, err := os.Readlink(path)
 	if err == nil {
@@ -699,7 +703,7 @@ func birdTaskStructured(parent context.Context, method string, params map[string
 	switch method {
 	case "bird.inspect":
 		version := runCommand(parent, "bird", []string{"--version"}, 15*time.Second, 64*1024)
-		protocols := runBirdc(parent, socket, "show protocols all")
+		protocols := runBirdcVerbose(parent, socket, "show protocols all")
 		r.Stdout = version.stdout + version.stderr + "\n---BIRDBOX---\n" + protocols.stdout
 		r.Stderr = strings.TrimSpace(version.stderr + "\n" + protocols.stderr)
 		r.OK = version.ok && protocols.ok
