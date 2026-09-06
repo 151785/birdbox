@@ -10,6 +10,7 @@ export {
   applyStagedConfig,
   checkIncludeNodeAccess,
   configureManagedSsh,
+  executeNodeCommand,
   inspectNode,
   inspectOspfRuntime,
   inspectProtocolRoutes,

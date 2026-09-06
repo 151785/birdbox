@@ -13,7 +13,7 @@ import type {
 import type { ResourceWorkspaceTarget } from "../shared/events";
 import { resourceScopeShortLabel } from "../shared/resource-scope";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   family: AddressFamily;
   direction: "import" | "export";
   policy: ChannelPolicy;
@@ -23,7 +23,9 @@ const props = defineProps<{
   defines: PolicyDefine[];
   disabled: boolean;
   showPolicyAction?: boolean;
-}>();
+}>(), {
+  showPolicyAction: true,
+});
 
 const emit = defineEmits<{
   "update:policy": [policy: ChannelPolicy];

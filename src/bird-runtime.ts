@@ -1,4 +1,3 @@
-import { execFile, type ExecFileException, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import net from "node:net";
@@ -16,24 +15,15 @@ import {
 } from "./bird-normalize-common.js";
 import { parseProtocolStatuses, parseRouteDetails, parseRoutePath, type RoutePathEntry } from "./bird-runtime-parser.js";
 import { configBundle, type NodeConfigBundle } from "./config-bundle.js";
+import {
+  configureManagedSsh,
+  executeNodeCommand,
+  type NodeCommandResult,
+  type NodeExecutorOptions,
+} from "./node-executor.js";
 
-interface ManagedSshConfiguration {
-  identityFile: string | null;
-  knownHostsFile: string | null;
-}
-
-interface RunOnNodeOptions {
-  timeout?: number;
-  maxBuffer?: number;
-  input?: string;
-}
-
-export interface NodeCommandResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  code?: string | number;
-}
+export { configureManagedSsh, executeNodeCommand } from "./node-executor.js";
+export type { NodeCommandResult, NodeExecutorOptions } from "./node-executor.js";
 
 interface RouteInspectionOptions {
   limit?: number;
@@ -86,17 +76,6 @@ export interface RoutePathResult {
   limit: number;
 }
 
-interface ExecError extends ExecFileException {
-  stdout?: string;
-  stderr?: string;
-}
-
-const OPENSSH_INFORMATION_LINES = new Set([
-  "** WARNING: connection is not using a post-quantum key exchange algorithm.",
-  "** This session may be vulnerable to \"store now, decrypt later\" attacks.",
-  "** The server may need to be upgraded. See https://openssh.com/pq.html",
-]);
-
 // OpenWrt BusyBox images may omit the stat applet. Keep ownership discovery
 // numeric so resource deployment can still use chgrp with the socket GID.
 const REMOTE_FILE_GID_HELPER = `
@@ -108,26 +87,6 @@ file_gid() {
   fi
 }
 `.trim();
-
-let managedSshConfiguration: ManagedSshConfiguration = { identityFile: null, knownHostsFile: null };
-
-function commandStderr(node: ManagedNode, value: unknown): string {
-  const stderr = String(value ?? "").replace(/\r\n/g, "\n");
-  if (node.transport !== "ssh") return stderr.trim();
-  return stderr
-    .split("\n")
-    .filter((line) => !OPENSSH_INFORMATION_LINES.has(line))
-    .filter((line) => !/^Warning: Permanently added .+ to the list of known hosts\.$/.test(line))
-    .join("\n")
-    .trim();
-}
-
-export function configureManagedSsh({ identityFile, knownHostsFile }: { identityFile: string; knownHostsFile: string }): void {
-  managedSshConfiguration = {
-    identityFile: path.resolve(identityFile),
-    knownHostsFile: path.resolve(knownHostsFile),
-  };
-}
 
 export const ACTIVE_BIRD_INCLUDE_AWK = `
 BEGIN {
@@ -188,89 +147,7 @@ function strip_comments(source, output, cursor, character, pair, quoted, escaped
 END { exit found ? 0 : 1 }
 `.trim();
 
-function sshArgs(node: ManagedNode, remoteCommand: string): string[] {
-  const args = [
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=8",
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "HashKnownHosts=yes",
-    "-o", "UpdateHostKeys=yes",
-  ];
-  // Reuse one OpenSSH master per managed node. Commands still get independent
-  // channels, while handshakes and key exchange happen only once per idle
-  // persistence window. The controller SSH directory is private and already
-  // created during identity initialization, so the control socket is safe to
-  // keep beside the managed key.
-  if (managedSshConfiguration.identityFile) {
-    args.push(
-      "-o", "ControlMaster=auto",
-      "-o", "ControlPersist=300",
-      "-o", `ControlPath=${path.join(path.dirname(managedSshConfiguration.identityFile), "cm-%C")}`,
-    );
-  }
-  if (node.sshPort !== 22) args.push("-p", String(node.sshPort));
-  if (node.sshIdentity === "managed") {
-    assertValidation(managedSshConfiguration.identityFile && managedSshConfiguration.knownHostsFile, "Birdbox 托管 SSH 密钥尚未初始化");
-    args.push(
-      "-i", managedSshConfiguration.identityFile,
-      "-o", `UserKnownHostsFile=${managedSshConfiguration.knownHostsFile}`,
-      "-o", "IdentitiesOnly=yes",
-    );
-  }
-  const commandWithSystemPath = `PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH; export PATH; ${remoteCommand}`;
-  args.push("--", node.sshUser ? `${node.sshUser}@${node.sshHost}` : node.sshHost as string, commandWithSystemPath);
-  return args;
-}
-
-function execFileWithInput(
-  executable: string,
-  args: string[],
-  options: ExecFileOptionsWithStringEncoding,
-  input?: string,
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = execFile(executable, args, options, (error, stdout, stderr) => {
-      if (error) {
-        const execError = error as ExecError;
-        execError.stdout = stdout;
-        execError.stderr = stderr;
-        reject(execError);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    if (input !== undefined) {
-      child.stdin?.on("error", () => {});
-      child.stdin?.end(input);
-    }
-  });
-}
-
-export async function runOnNode(nodeInput: unknown, command: string, options: RunOnNodeOptions = {}): Promise<NodeCommandResult> {
-  const input = nodeInput && typeof nodeInput === "object" ? nodeInput as Partial<ManagedNode> : null;
-  assertValidation(input?.kind === "managed-node", "命令只能在受管节点执行");
-  const node = normalizeNode(nodeInput);
-  const timeout = options.timeout ?? 15_000;
-  const maxBuffer = options.maxBuffer ?? 2 * 1024 * 1024;
-  try {
-    const executable = node.transport === "local" ? "bash" : "ssh";
-    const args = node.transport === "local" ? ["-lc", command] : sshArgs(node, command);
-    const result = await execFileWithInput(executable, args, {
-      timeout,
-      maxBuffer,
-      encoding: "utf8",
-    }, options.input);
-    return { ok: true, stdout: result.stdout.trim(), stderr: commandStderr(node, result.stderr) };
-  } catch (error) {
-    const execError = error as ExecError;
-    return {
-      ok: false,
-      stdout: String(execError.stdout ?? "").trim(),
-      stderr: commandStderr(node, execError.stderr ?? execError.message ?? "命令执行失败"),
-      code: execError.code ?? 1,
-    };
-  }
-}
+export const runOnNode = executeNodeCommand;
 
 export async function inspectNode(nodeInput: unknown): Promise<NodeRuntime> {
   const node = normalizeNode(nodeInput);
@@ -283,7 +160,7 @@ else
 fi
 printf '%s\\n---BIRDBOX---\\n%s\\n' "$version" "$protocols"
 `.trim();
-  const result = await runOnNode(node, command, { timeout: 12_000 });
+  const result = await executeNodeCommand(node, command, { timeout: 12_000 });
   const [version = "", raw = ""] = result.stdout.split("---BIRDBOX---");
   return {
     nodeId: node.id,
@@ -367,7 +244,7 @@ export async function inspectOspfRuntime(nodeInput: unknown, protocolNames: { v2
     "interfaces=$(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \\([^:@]*\\).*$/\\1/p' | paste -sd '\\n' -)",
     "printf '%s\\n---BIRDBOX-OSPF-V2-COUNT---\\n%s\\n---BIRDBOX-OSPF-V2-ROUTES---\\n%s\\n---BIRDBOX-OSPF-V3-COUNT---\\n%s\\n---BIRDBOX-OSPF-V3-ROUTES---\\n%s\\n---BIRDBOX-OSPF-INTERFACES---\\n%s\\n' \"$neighbors\" \"$v2count\" \"$v2routes\" \"$v3count\" \"$v3routes\" \"$interfaces\"",
   ].join("\n");
-  const result = await runOnNode(node, command, { timeout: 15_000 });
+  const result = await executeNodeCommand(node, command, { timeout: 15_000 });
   const [neighbors = "", v2count = "", v2routes = "", v3count = "", v3routes = "", interfaces = ""] = result.stdout.split(/---BIRDBOX-OSPF-(?:V2-COUNT|V2-ROUTES|V3-COUNT|V3-ROUTES|INTERFACES)---/);
   return {
     reachable: result.ok,
@@ -404,7 +281,7 @@ export async function checkIncludeNodeAccess(nodeInput: unknown): Promise<NodeCo
     "id -un",
     "id -Gn",
   ].join("\n");
-  return runOnNode(node, command, { timeout: 12_000 });
+  return executeNodeCommand(node, command, { timeout: 12_000 });
 }
 
 export async function inspectProtocolRoutes(
@@ -456,7 +333,7 @@ if [ "$status" -ne 0 ] && ! printf '%s\n' "$output" | grep -q '^---BIRDBOX-ROUTE
   exit "$status"
 fi
 `.trim();
-  const result = await runOnNode(node, command, { timeout: 20_000, maxBuffer: 2 * 1024 * 1024 });
+  const result = await executeNodeCommand(node, command, { timeout: 20_000, maxBuffer: 2 * 1024 * 1024 });
   return {
     ok: result.ok,
     ...parseRouteDetails(result.stdout, family, limit),
@@ -471,7 +348,7 @@ export async function inspectRoutePath(nodeInput: unknown, targetInput: unknown)
   assertValidation(net.isIP(baseTarget) !== 0, "目标 IP 地址不合法");
   const family: AddressFamily = net.isIP(baseTarget) === 4 ? "ipv4" : "ipv6";
   const table = family === "ipv4" ? "master4" : "master6";
-  const result = await runOnNode(
+  const result = await executeNodeCommand(
     node,
     `birdc -s '${node.socketPath}' 'show route table ${table} for ${target} all' 2>&1`,
     { timeout: 15_000, maxBuffer: 512 * 1024 },
@@ -513,7 +390,7 @@ async function stageResourceFiles(node: ManagedNode, bundle: NodeConfigBundle, b
     const hash = createHash("sha256").update(resource.content).digest("hex").slice(0, 16);
     const versionName = `${resource.relativePath.replace(/\.conf$/, "")}.${hash}.conf`;
     const versionPath = `${versionDirectory}/${versionName}`;
-    const result = await runOnNode(node, [
+    const result = await executeNodeCommand(node, [
       "set -eu", "umask 0077",
       REMOTE_FILE_GID_HELPER,
       `if [ -S '${node.socketPath}' ]; then bird_group=$(file_gid '${node.socketPath}'); else bird_group=$(id -g bird); fi`,
@@ -615,7 +492,7 @@ export async function stageAndValidate(nodeInput: unknown, bundleInput: string |
       `mv -f '${switchLink}' '${activePath}'`,
       `birdc -s '${node.socketPath}' 'configure check'`,
     ].join("\n");
-    return runOnNode(node, command, { timeout: 15_000, input: config });
+    return executeNodeCommand(node, command, { timeout: 15_000, input: config });
   }
   const stagedResources = await stageResourceFiles(node, bundle, RUNTIME.baseDir);
   if (!stagedResources.ok) return stagedResources;
@@ -632,7 +509,7 @@ export async function stageAndValidate(nodeInput: unknown, bundleInput: string |
     "trap restore_resources EXIT HUP INT TERM",
     `bird -p -c '${RUNTIME.configPath}.candidate'`,
   ].join("\n");
-  return runOnNode(node, command, { timeout: 15_000, input: config });
+  return executeNodeCommand(node, command, { timeout: 15_000, input: config });
 }
 
 export async function applyStagedConfig(nodeInput: unknown, bundleInput: string | NodeConfigBundle = ""): Promise<NodeCommandResult> {
@@ -670,7 +547,7 @@ export async function applyStagedConfig(nodeInput: unknown, bundleInput: string 
       `birdc -s '${node.socketPath}' configure >/dev/null 2>&1 || true`,
       "exit 1",
     ].join("\n");
-    return runOnNode(node, command, { timeout: 20_000 });
+    return executeNodeCommand(node, command, { timeout: 20_000 });
   }
   const command = [
     "set -eu",
@@ -686,7 +563,7 @@ export async function applyStagedConfig(nodeInput: unknown, bundleInput: string 
     `if [ -f '${RUNTIME.configPath}.rollback' ]; then cp -a '${RUNTIME.configPath}.rollback' '${RUNTIME.configPath}'; if [ -S '${RUNTIME.socketPath}' ]; then birdc -s '${RUNTIME.socketPath}' configure >/dev/null 2>&1 || true; fi; else rm -f '${RUNTIME.configPath}'; fi`,
     "exit 1",
   ].join("\n");
-  return runOnNode(node, command, { timeout: 20_000 });
+  return executeNodeCommand(node, command, { timeout: 20_000 });
 }
 
 export async function rollbackNode(nodeInput: unknown, bundleInput: string | NodeConfigBundle = ""): Promise<NodeCommandResult> {
@@ -711,10 +588,10 @@ export async function rollbackNode(nodeInput: unknown, bundleInput: string | Nod
       `birdc -s '${node.socketPath}' configure >/dev/null 2>&1 || true`,
       "exit 1",
     ].join("\n");
-    return runOnNode(node, command, { timeout: 20_000 });
+    return executeNodeCommand(node, command, { timeout: 20_000 });
   }
   const command = [...resourceRollbackCommands(bundle, RUNTIME.baseDir), `if [ -f '${RUNTIME.configPath}.rollback' ]; then cp -a '${RUNTIME.configPath}.rollback' '${RUNTIME.configPath}'; bird -p -c '${RUNTIME.configPath}'; if [ -S '${RUNTIME.socketPath}' ]; then birdc -s '${RUNTIME.socketPath}' configure; else bird -c '${RUNTIME.configPath}' -s '${RUNTIME.socketPath}' -P '${RUNTIME.pidPath}' -u bird -g bird; fi; else if [ -S '${RUNTIME.socketPath}' ]; then birdc -s '${RUNTIME.socketPath}' down || true; fi; rm -f '${RUNTIME.configPath}'; fi`].join("\n");
-  return runOnNode(node, command, { timeout: 20_000 });
+  return executeNodeCommand(node, command, { timeout: 20_000 });
 }
 
 export async function setProtocolState(nodeInput: unknown, protocolNameInput: unknown, enabled: boolean): Promise<NodeCommandResult> {
@@ -722,7 +599,7 @@ export async function setProtocolState(nodeInput: unknown, protocolNameInput: un
   const protocolName = normalizeId(protocolNameInput, "BGP 协议名称");
   assertValidation(typeof enabled === "boolean", "BGP 协议状态不合法");
   const command = `${enabled ? "enable" : "disable"} ${protocolName}`;
-  return runOnNode(node, `birdc -s '${node.socketPath}' '${command}'`, { timeout: 10_000 });
+  return executeNodeCommand(node, `birdc -s '${node.socketPath}' '${command}'`, { timeout: 10_000 });
 }
 
 export async function stopProtocol(nodeInput: unknown, protocolName: unknown): Promise<NodeCommandResult> {

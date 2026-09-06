@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   checkIncludeNodeAccess,
   configureManagedSsh,
+  executeNodeCommand,
   locateStaticRouteDiagnostic,
   makeStaticProtocolName,
   normalizeNode,
@@ -1148,6 +1149,25 @@ test("rejects command execution for an external Peer object", async () => {
   await assert.rejects(
     () => runOnNode(peers[0], "true"),
     /只能在受管节点执行/,
+  );
+});
+
+test("enforces node executor command and process limits before spawning", async () => {
+  await assert.rejects(
+    () => executeNodeCommand(node, "printf 'bad\u0000payload'"),
+    /不能包含 NUL 字符/,
+  );
+  await assert.rejects(
+    () => runOnNode(node, "true", { timeout: 100 }),
+    /超时不合法/,
+  );
+  await assert.rejects(
+    () => runOnNode(node, "true", { maxBuffer: 512 }),
+    /输出限制不合法/,
+  );
+  await assert.rejects(
+    () => runOnNode(node, "x".repeat(256 * 1024 + 1)),
+    /命令长度超出限制/,
   );
 });
 

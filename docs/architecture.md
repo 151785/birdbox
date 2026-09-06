@@ -25,6 +25,7 @@ apps/web/
 packages/contracts/src/    HTTP 与当前持久化数据的共享类型
 src/http/                  Fastify 应用工厂、认证、查询、运行控制和写接口路由
 src/bird-*.ts              BIRD 规范化、渲染、运行解析和远端操作
+src/node-executor.ts      受管节点本机/SSH 执行器、连接参数和进程边界限制
 src/deployment-service.ts  部署锁内的预检、恢复日志、提交和回滚
 src/inventory-domain.ts    库存查找、资源作用域、引用检查和节点配置生成
 src/controller-ssh.ts      控制器 SSH 身份、密钥权限和 known_hosts 信任

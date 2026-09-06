@@ -3,7 +3,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { ChangeEvent, DashboardRuntimeResponse, RouteDetailsResponse, RoutePathResponse } from "../../packages/contracts/src/api.js";
 import type { Inventory, ManagedNode } from "../../packages/contracts/src/inventory.js";
 import type { AuthStore } from "../auth.js";
-import { inspectNode, inspectOspfRuntime, inspectProtocolRoutes, inspectRoutePath, runOnNode, setProtocolState } from "../bird.js";
+import { executeNodeCommand, inspectNode, inspectOspfRuntime, inspectProtocolRoutes, inspectRoutePath, setProtocolState } from "../bird.js";
 import { ospfDomainNodeIds, ospfProtocolName } from "../ospf.js";
 import { configForNode } from "../inventory-domain.js";
 import type { InventoryStore } from "../store.js";
@@ -81,7 +81,7 @@ export const sessionRuntimeRoutes: FastifyPluginAsync<SessionRuntimeRoutesOption
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.params.nodeId)) throw routeError(404, "接口不存在");
     const state = await options.store.read();
     const node = findNode(state, request.params.nodeId);
-    const result = await runOnNode(
+    const result = await executeNodeCommand(
       node,
       "ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \\([^:@]*\\).*$/\\1/p'",
       { timeout: 10_000 },
