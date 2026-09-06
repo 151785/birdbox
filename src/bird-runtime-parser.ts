@@ -100,6 +100,20 @@ export function parseProtocolStatuses(raw: unknown): ProtocolRuntime[] {
   });
 }
 
+/** Keep only one verbose protocol block when a BIRD version ignores the name filter. */
+export function extractProtocolDetails(raw: unknown, protocolName: string): string {
+  const text = String(raw ?? "").replace(/\r\n/g, "\n");
+  const lines = text.split("\n");
+  const headers = lines.map((line, index) => {
+    const match = line.match(/^1002-([^\s]+)\s/);
+    return match?.[1] ? { name: match[1], index } : null;
+  }).filter((item): item is { name: string; index: number } => item !== null);
+  const header = headers.find((item) => item.name === protocolName);
+  if (!header) return text.trim();
+  const next = headers.find((item) => item.index > header.index);
+  return lines.slice(header.index, next?.index ?? lines.length).join("\n").trim();
+}
+
 export function parseRouteDetails(raw: unknown, family: AddressFamily, limit = 200): ParsedRouteDetails {
   if (family !== "ipv4" && family !== "ipv6") validationError("路由地址族不合法");
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) validationError("路由明细数量限制不合法");

@@ -27,7 +27,7 @@ export {
   startProtocol,
   stopProtocol,
 } from "./bird-runtime.js";
-export { parseProtocolStatus, parseProtocolStatuses, parseRouteDetails, parseRoutePath } from "./bird-runtime-parser.js";
+export { extractProtocolDetails, parseProtocolStatus, parseProtocolStatuses, parseRouteDetails, parseRoutePath } from "./bird-runtime-parser.js";
 export { normalizeSession } from "./bird-session.js";
 export { normalizeStaticProtocol } from "./bird-static.js";
 export {

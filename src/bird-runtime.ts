@@ -13,7 +13,7 @@ import {
   normalizeNode,
   normalizeOptionalName,
 } from "./bird-normalize-common.js";
-import { parseProtocolStatuses, parseRouteDetails, parseRoutePath, type RoutePathEntry } from "./bird-runtime-parser.js";
+import { extractProtocolDetails, parseProtocolStatuses, parseRouteDetails, parseRoutePath, type RoutePathEntry } from "./bird-runtime-parser.js";
 import { configBundle, type NodeConfigBundle } from "./config-bundle.js";
 import {
   configureManagedSsh,
@@ -194,7 +194,7 @@ export async function inspectProtocolDetails(nodeInput: unknown, protocolNameInp
     }, 20_000);
     return {
       ok: result.ok,
-      output: result.stdout.trim(),
+      output: extractProtocolDetails(result.stdout, protocolName),
       error: result.ok ? null : (result.stderr || result.stdout || "无法读取 BIRD 协议详情"),
     };
   }
@@ -205,7 +205,7 @@ export async function inspectProtocolDetails(nodeInput: unknown, protocolNameInp
   );
   return {
     ok: result.ok,
-    output: result.stdout.trim(),
+    output: extractProtocolDetails(result.stdout, protocolName),
     error: result.ok ? null : (result.stderr || result.stdout || "无法读取 BIRD 协议详情"),
   };
 }

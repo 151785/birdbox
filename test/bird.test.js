@@ -11,6 +11,7 @@ import {
   configureManagedSsh,
   configureAgentBroker,
   executeNodeCommand,
+  extractProtocolDetails,
   locateStaticRouteDiagnostic,
   makeStaticProtocolName,
   normalizeNode,
@@ -183,6 +184,14 @@ test("normalizes managed nodes, peers, typed Defines, and session-local settings
     () => normalizeSession({ ...sessions[0], bgp: { description: "Bad\rdescription" } }),
     /控制字符/,
   );
+});
+
+test("extracts only the requested verbose BIRD protocol block", () => {
+  const raw = `BIRD 2.19.1 ready.\n1002-first_bgp BGP\n  BGP state: Established\n1002-second_bgp BGP\n  BGP state: Idle\n`;
+  const details = extractProtocolDetails(raw, "first_bgp");
+  assert.match(details, /1002-first_bgp/);
+  assert.match(details, /BGP state: Established/);
+  assert.doesNotMatch(details, /second_bgp/);
 });
 
 test("normalizes SSH Include onboarding nodes without daemon-owned declarations", () => {

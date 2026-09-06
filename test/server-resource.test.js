@@ -51,7 +51,7 @@ test("resource PUT applies to existing sessions and rejects invalid edits atomic
 printf '%s %s\n' "$0" "$*" >> "$BIRDBOX_FAKE_LOG"
 case "$*" in
   *"show protocols all test_bgp"*)
-    printf '%s\n' 'BIRD 2.19.1 ready.' 'test_bgp BGP' '  BGP state: Established' '  Neighbor address: 192.0.2.2' '  Neighbor AS: 65002' '  Channel ipv4' '    State: UP' '    Routes: 1 imported, 1 exported, 1 preferred'
+    printf '%s\n' 'BIRD 2.19.1 ready.' '1002-test_bgp BGP' '  BGP state: Established' '  Neighbor address: 192.0.2.2' '  Neighbor AS: 65002' '  Channel ipv4' '    State: UP' '    Routes: 1 imported, 1 exported, 1 preferred' '1002-other_bgp BGP' '  BGP state: Idle'
     exit 0
     ;;
   *"show route table master4 for 203.0.113.5 all"*)
@@ -345,6 +345,7 @@ exit 0
   assert.equal(protocolDetails.body.session.protocolName, "test_bgp");
   assert.equal(protocolDetails.body.ok, true);
   assert.match(protocolDetails.body.output, /BGP state: Established/);
+  assert.doesNotMatch(protocolDetails.body.output, /other_bgp/);
   assert.match(await fs.readFile(fakeLog, "utf8"), /show protocols all test_bgp/);
 
   const disabledSession = await authenticatedRequest("/api/sessions/apply", {
