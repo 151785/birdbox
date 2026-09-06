@@ -87,8 +87,12 @@ export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (
   app.delete<{ Params: { nodeId: string }; Querystring: { force?: string } }>("/api/nodes/:nodeId", async (request, reply) => jsonReply(reply, await options.service.deleteNode(validId(request.params.nodeId), request.query.force === "true")));
   app.get("/api/agent/status", async (_request, reply) => reply.send({ agents: options.agentBroker.statuses() }));
   app.post<{ Params: { nodeId: string } }>("/api/agent/nodes/:nodeId/upgrade", async (request, reply) => {
+    const nodeId = validId(request.params.nodeId);
+    if (!options.agentBroker.status(nodeId)?.connected) {
+      throw routeError(409, "Agent 当前未连接，无法下发升级任务", "AGENT_OFFLINE");
+    }
     const body = jsonBody(request);
-    const result = await options.agentBroker.dispatch(validId(request.params.nodeId), "agent.self_upgrade", body, 10 * 60 * 1000);
+    const result = await options.agentBroker.dispatch(nodeId, "agent.self_upgrade", body, 10 * 60 * 1000);
     return reply.code(result.ok ? 200 : 502).send(result);
   });
 

@@ -2,6 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw } from "vue";
 
 import type {
+  AgentStatus,
+  AgentStatusResponse,
+  AgentUpgradeResponse,
   NodeMutationRequest,
   NodeMutationResponse,
   NodeSetupScriptResponse,
@@ -33,6 +36,8 @@ const setupScript = ref("");
 const setupScriptUrl = ref("");
 const includeLine = ref("");
 const onboardingAgentId = ref<string | null>(null);
+const agentStatus = ref<AgentStatus | null>(null);
+const agentUpgradeStatus = ref("");
 const cleanupNode = ref<ManagedNode | null>(null);
 const cleanupForced = ref(false);
 const systemPreset = ref<NodeSystemPreset>("linux");
@@ -103,6 +108,8 @@ function resetDraft(node: ManagedNode | null): void {
   setupScriptUrl.value = "";
   includeLine.value = "";
   onboardingAgentId.value = node?.id ?? null;
+  agentStatus.value = null;
+  agentUpgradeStatus.value = "";
   if (form.value) clearFormValidation(form.value);
 }
 
@@ -143,7 +150,75 @@ function applySystemPreset(preset: NodeSystemPreset): void {
 function open(node: ManagedNode | null): void {
   resetDraft(node);
   if (!dialog.value?.open) dialog.value?.showModal();
+  if (node?.transport === "agent") void loadAgentStatus(node.id);
   void nextTick(() => document.querySelector<HTMLInputElement>("#nodeEditorName")?.focus());
+}
+
+async function loadAgentStatus(nodeId: string): Promise<void> {
+  try {
+    const result = await api<AgentStatusResponse>("/api/agent/status", { mutationWait: false });
+    if (editingId.value === nodeId && isAgent.value) agentStatus.value = result.agents.find((item) => item.nodeId === nodeId) ?? null;
+  } catch {
+    if (editingId.value === nodeId && isAgent.value) agentStatus.value = null;
+  }
+}
+
+function agentArchitecture(): string {
+  const value = String(agentStatus.value?.architecture ?? "").toLowerCase();
+  const mapped: Record<string, string> = {
+    x64: "amd64", x86_64: "amd64", amd64: "amd64",
+    aarch64: "arm64", arm64: "arm64", armv7l: "arm",
+    arm: "arm", mips: "mips", mipsel: "mipsle", mipsle: "mipsle",
+    mips64: "mips64", mips64le: "mips64", riscv64: "riscv64",
+  };
+  return mapped[value] ?? "amd64";
+}
+
+async function latestAgentChecksum(arch: string): Promise<string> {
+  const response = await fetch(`/api/agent/releases/latest/checksum?arch=${encodeURIComponent(arch)}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const checksum = (await response.text()).trim();
+  if (!response.ok || !/^[0-9a-f]{64}$/i.test(checksum)) throw new Error("控制器没有提供该架构的 Agent 发布包或校验值");
+  return checksum;
+}
+
+async function upgradeAgent(): Promise<void> {
+  const nodeId = editingId.value;
+  if (!nodeId || !isAgent.value || !form.value) return;
+  if (!agentStatus.value?.connected) {
+    dispatchToast("Agent 当前未连接，无法下发升级", "error");
+    return;
+  }
+  pending.value = true;
+  agentUpgradeStatus.value = "正在获取发布包校验值";
+  try {
+    const arch = agentArchitecture();
+    const checksum = await latestAgentChecksum(arch);
+    agentUpgradeStatus.value = "正在下发升级任务，请等待 Agent 重启";
+    const url = `${window.location.origin}/api/agent/releases/latest/download?arch=${encodeURIComponent(arch)}`;
+    const result = await api<AgentUpgradeResponse>(`/api/agent/nodes/${encodeURIComponent(nodeId)}/upgrade`, {
+      method: "POST",
+      timeoutMs: 650_000,
+      body: JSON.stringify({
+        url,
+        sha256: checksum,
+        targetPath: "/usr/local/bin/birdbox-agent",
+        service: "birdbox-agent",
+        version: __BIRDBOX_VERSION__,
+      }),
+    });
+    if (!result.ok) throw new Error(result.stderr || result.stdout || "Agent 升级失败");
+    agentUpgradeStatus.value = `升级任务完成，目标版本 ${String(result.result?.version ?? __BIRDBOX_VERSION__)}；等待 Agent 重新注册`;
+    dispatchToast("Agent 升级已完成，正在等待重新连接", "success");
+    window.setTimeout(() => { if (editingId.value === nodeId) void loadAgentStatus(nodeId); }, 7000);
+  } catch (error) {
+    agentUpgradeStatus.value = "升级失败";
+    dispatchToast(error instanceof Error ? error.message : "Agent 升级失败", "error");
+  } finally {
+    pending.value = false;
+  }
 }
 
 function close(): void {
@@ -418,6 +493,13 @@ onBeforeUnmount(() => {
           <p class="dialog-note">先生成并在节点上执行升级脚本，确认 Agent 已连接后，再点击切换。旧 SSH 配置在切换前不会改变。</p>
           <div class="node-onboarding-actions"><button class="secondary-button" type="button" :disabled="pending" @click="generateAgentUpgradeScript">生成升级脚本</button><button class="primary-button" type="button" :disabled="pending" @click="promoteToAgent">切换为 Agent</button></div>
           <div v-if="setupScript" class="node-setup-guide"><div class="setup-command"><div class="setup-guide-heading"><span>直接粘贴到目标节点 Shell（URL 15 分钟内有效，最多下载 3 次）</span><button class="compact-command" type="button" @click="copyDirectSetupCommand">复制执行命令</button></div><code>{{ directSetupCommand() }}</code></div><div class="setup-guide-heading"><span>完整脚本（离线执行）</span><button class="compact-command" type="button" @click="copyScript">复制完整脚本</button></div><pre>{{ setupScript }}</pre></div>
+        </section>
+        <section v-if="editing && isAgent" id="nodeAgentSelfUpgradePanel" class="node-onboarding full-width">
+          <div class="node-onboarding-head"><strong>Agent 版本</strong><span :class="agentStatus?.connected ? 'ready' : 'error'">{{ agentStatus?.connected ? `在线 · ${agentStatus.agentVersion}` : "未连接" }}</span></div>
+          <p class="dialog-note">控制器会按节点架构下载当前发布版本，校验 SHA-256 后原子替换 Agent 并重启服务。节点现有 BIRD 配置不会改变。</p>
+          <p v-if="agentStatus" class="node-agent-meta">{{ agentStatus.platform ?? "未知系统" }} · {{ agentStatus.architecture ?? "未知架构" }}<span v-if="agentStatus.hostname"> · {{ agentStatus.hostname }}</span></p>
+          <div class="node-onboarding-actions"><button class="secondary-button" type="button" :disabled="pending || !agentStatus?.connected" @click="upgradeAgent">{{ pending ? "正在升级 Agent" : "升级到当前版本" }}</button><button class="compact-command" type="button" :disabled="pending" @click="editingId && loadAgentStatus(editingId)">刷新状态</button></div>
+          <p v-if="agentUpgradeStatus" class="dialog-note" role="status" aria-live="polite">{{ agentUpgradeStatus }}</p>
         </section>
       </div>
       <div class="dialog-actions split-actions">

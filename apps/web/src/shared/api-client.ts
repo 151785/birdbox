@@ -45,6 +45,7 @@ function isDeploymentMutation(path: string, method: string): boolean {
   if (/^\/api\/sessions\/(?:preview|apply)$/.test(path)) return true;
   if (method === "DELETE" && /^\/api\/sessions\//.test(path)) return true;
   if (path === "/api/nodes/test" || (path === "/api/nodes" && method === "POST")) return true;
+  if (/^\/api\/agent\/nodes\/[A-Za-z_][A-Za-z0-9_]*\/upgrade$/.test(path)) return true;
   if (/^\/api\/ibgp-domains(?:\/|$)/.test(path)) return method !== "PATCH" || /\/layout$/.test(path);
   if (path === "/api/ospf/preview") return true;
   if (/^\/api\/ospf(?:\/[^/]+)?$/.test(path)) return method !== "PATCH";
@@ -61,6 +62,7 @@ function mutationWaitPresentation(path: string, method: string): MutationWaitPre
   else if (/^\/api\/sessions\/[^/]+\/control$/.test(pathname)) title = "正在更新会话状态";
   else if (method === "DELETE" && /^\/api\/sessions\//.test(pathname)) title = "正在移除会话";
   else if (pathname === "/api/nodes/test") title = "正在检查节点接入条件";
+  else if (/^\/api\/agent\/nodes\/[A-Za-z_][A-Za-z0-9_]*\/upgrade$/.test(pathname)) title = "正在升级 Agent";
   else if (pathname === "/api/nodes/setup-script") title = "正在生成节点准备脚本";
   else if (/^\/api\/nodes(?:\/|$)/.test(pathname)) title = method === "DELETE" ? "正在删除节点" : "正在保存节点";
   else if (/^\/api\/peers(?:\/|$)/.test(pathname) || /\/peers$/.test(pathname)) title = method === "DELETE" ? "正在删除 Peer" : "正在保存 Peer";

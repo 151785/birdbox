@@ -235,6 +235,31 @@ export interface NodeSetupScriptResponse {
   rpkiRequirements: NodeOnboardingRpkiRequirement[];
 }
 
+export interface AgentStatus {
+  nodeId: string;
+  connected: boolean;
+  registeredAt: string;
+  lastSeenAt: string;
+  agentVersion: string;
+  protocolVersion: number;
+  capabilities: string[];
+  platform: string | null;
+  architecture: string | null;
+  hostname: string | null;
+}
+
+export interface AgentStatusResponse {
+  agents: AgentStatus[];
+}
+
+export interface AgentUpgradeResponse {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  code?: string | number;
+  result?: { version?: unknown };
+}
+
 export interface NodeTestResponse {
   ok: true;
   node: Pick<ManagedNode, "name" | "sshHost" | "sshPort" | "sshUser">;

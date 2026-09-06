@@ -433,6 +433,7 @@ form.validation-attempted .channel-enable-row.field-invalid h3 { color: var(--re
 .node-onboarding-head span.ready { color: var(--green-dark); font-weight: 700; }
 .node-onboarding-head span.error { color: var(--red); font-weight: 700; }
 .node-onboarding-actions { justify-content: flex-start; margin-top: 11px; }
+.node-agent-meta { margin: 7px 0 0; color: var(--muted); font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .node-setup-guide { margin-top: 12px; }
 .setup-guide-heading, .setup-include { color: var(--muted); font-size: 11px; }
 .setup-command { margin-bottom: 10px; }
