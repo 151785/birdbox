@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ManagedNode } from "../packages/contracts/src/inventory.js";
 import { assertValidation, normalizeNode } from "./bird-normalize-common.js";
 import type { AgentBroker } from "./agent-broker.js";
+import { errorContext, logger } from "./logger.js";
 
 /**
  * The maximum amount of shell source accepted by the legacy SSH transport.
@@ -44,13 +45,28 @@ export async function executeNodeRpc(
   const node = normalizeNode(nodeInput);
   assertValidation(node.transport === "agent", "结构化 RPC 只能用于 Agent 节点");
   assertValidation(agentBroker !== null, "Agent 通信服务尚未初始化");
-  const result = await agentBroker.dispatch(node.id, method, params, timeout);
-  return {
-    ok: result.ok,
-    stdout: String(result.stdout ?? "").trim(),
-    stderr: String(result.stderr ?? "").trim(),
-    ...(result.code === undefined ? {} : { code: result.code }),
-  };
+  const startedAt = Date.now();
+  logger.info("开始执行 Agent 操作", { nodeId: node.id, method, timeoutMs: timeout });
+  try {
+    const result = await agentBroker.dispatch(node.id, method, params, timeout);
+    const normalized = {
+      ok: result.ok,
+      stdout: String(result.stdout ?? "").trim(),
+      stderr: String(result.stderr ?? "").trim(),
+      ...(result.code === undefined ? {} : { code: result.code }),
+    };
+    logger.info("Agent 操作完成", {
+      nodeId: node.id,
+      method,
+      ok: normalized.ok,
+      code: normalized.code === undefined ? null : String(normalized.code),
+      durationMs: Date.now() - startedAt,
+    });
+    return normalized;
+  } catch (error) {
+    logger.error("Agent 操作异常", { nodeId: node.id, method, durationMs: Date.now() - startedAt, ...errorContext(error) });
+    throw error;
+  }
 }
 
 interface ExecError extends ExecFileException {
@@ -196,6 +212,8 @@ export async function executeNodeCommand(
     }, timeout + 10_000);
     return result;
   }
+  const startedAt = Date.now();
+  logger.info("开始执行节点命令", { nodeId: node.id, transport: node.transport, timeoutMs: timeout });
   try {
     const executable = node.transport === "local" ? "bash" : "ssh";
     const args = node.transport === "local"
@@ -206,15 +224,25 @@ export async function executeNodeCommand(
       maxBuffer,
       encoding: "utf8",
     }, options.input);
-    return { ok: true, stdout: result.stdout.trim(), stderr: commandStderr(node, result.stderr) };
+    const normalized = { ok: true, stdout: result.stdout.trim(), stderr: commandStderr(node, result.stderr) };
+    logger.info("节点命令完成", { nodeId: node.id, transport: node.transport, ok: true, durationMs: Date.now() - startedAt });
+    return normalized;
   } catch (error) {
     const execError = error as ExecError;
-    return {
+    const normalized = {
       ok: false,
       stdout: String(execError.stdout ?? "").trim(),
       stderr: commandStderr(node, execError.stderr ?? execError.message ?? "命令执行失败"),
       code: execError.code ?? 1,
     };
+    logger.warn("节点命令失败", {
+      nodeId: node.id,
+      transport: node.transport,
+      code: String(normalized.code),
+      durationMs: Date.now() - startedAt,
+      stderr: normalized.stderr.slice(0, 500),
+    });
+    return normalized;
   }
 }
 

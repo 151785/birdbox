@@ -316,7 +316,7 @@ async function preview(silent = false): Promise<boolean> {
     lastPreviewSignature.value = signature;
     lastPreviewFailureSignature.value = null;
     dirty.value = false;
-    if (!silent) dispatchToast("节点候选配置检查通过", "success");
+    if (!silent) dispatchToast("配置预检通过", "success");
     return true;
   } catch (error) {
     if (controller.signal.aborted) return false;
@@ -327,7 +327,7 @@ async function preview(silent = false): Promise<boolean> {
     const data = error instanceof ApiError ? error.data as SessionErrorData : undefined;
     updateDashboardPreview(data?.config, data?.events);
     lastPreviewFailureSignature.value = signature;
-    if (!silent) await presentError(error instanceof Error ? error.message : "候选配置检查失败");
+    if (!silent) await presentError(error instanceof Error ? error.message : "配置预检失败");
     return false;
   } finally {
     if (previewController.value === controller) {
@@ -446,7 +446,7 @@ onBeforeUnmount(() => {
   <section class="session-section" aria-labelledby="sessionTitle">
     <div class="section-heading compact"><div><p class="eyebrow">会话</p><h2 id="sessionTitle">会话配置</h2></div><span class="compatibility-badge">BIRD 2.19.1</span></div>
     <div class="session-preview-overlay" role="status" aria-live="polite" aria-atomic="true" :hidden="!previewPending">
-      <div class="session-preview-notice"><span class="session-preview-spinner" aria-hidden="true"></span><div><strong>正在预检会话配置</strong><span>正在等待节点返回候选配置检查结果</span></div></div>
+      <div class="session-preview-notice"><span class="session-preview-spinner" aria-hidden="true"></span><div><strong>正在预检会话配置</strong><span>等待节点返回检查结果</span></div></div>
     </div>
 
     <div v-if="unavailable" class="empty-state"><strong>{{ unavailableTitle }}</strong><button class="secondary-button" type="button" @click="openPeerResources">前往资源管理</button></div>

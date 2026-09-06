@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import type { BirdboxError, StateDatabase } from "./database.js";
+import { logger } from "./logger.js";
 
 interface ScryptParameters {
   N: number;
@@ -405,6 +406,7 @@ export class AuthStore {
       return { value: state, result: session.token };
     });
     if (!operation.result) throw new Error("Birdbox 认证会话创建失败");
+    logger.info("已完成管理员首次设置", { address: String(context.address ?? "") });
     return operation.result;
   }
 
@@ -414,7 +416,10 @@ export class AuthStore {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const observed = await this.#read();
       if (!observed.configured) throw authError(409, "AUTH_SETUP_REQUIRED", "请先设置管理密码");
-      if (!await verifyPassword(passwordValue, observed.password)) return null;
+      if (!await verifyPassword(passwordValue, observed.password)) {
+        logger.warn("管理员登录失败", { address: String(context.address ?? "") });
+        return null;
+      }
       const session = createSession(this.sessionTtlMs, context);
       const passwordRecord = passwordRecordIsCurrent(observed.password)
         ? observed.password
@@ -429,7 +434,10 @@ export class AuthStore {
         }
         return { value: { ...current, password: passwordRecord, sessions: [...sessions, session.record] }, result: session.token };
       });
-      if (operation.result) return operation.result;
+      if (operation.result) {
+        logger.info("管理员登录成功", { address: String(context.address ?? "") });
+        return operation.result;
+      }
     }
     return null;
   }
@@ -464,6 +472,7 @@ export class AuthStore {
       return { value: state, result: session.token };
     });
     if (!operation.result) throw new Error("Birdbox 认证会话创建失败");
+    logger.info("管理员密码已更新", { address: String(context.address ?? "") });
     return operation.result;
   }
 
@@ -478,7 +487,9 @@ export class AuthStore {
         result: true,
       };
     });
-    return operation.result ?? false;
+    const loggedOut = operation.result ?? false;
+    if (loggedOut) logger.info("管理员已退出登录");
+    return loggedOut;
   }
 
   async listSessions(token: string): Promise<ListedAuthSession[]> {
@@ -512,6 +523,7 @@ export class AuthStore {
       };
     });
     if (!operation.result) throw new Error("登录会话注销结果缺失");
+    logger.info("已注销管理员登录会话", { sessionId, current: operation.result.current });
     return operation.result;
   }
 
@@ -527,7 +539,9 @@ export class AuthStore {
         result: sessions.length - 1,
       };
     });
-    return operation.result ?? 0;
+    const revoked = operation.result ?? 0;
+    logger.info("已注销其它管理员会话", { count: revoked });
+    return revoked;
   }
 
   async #read(): Promise<AuthState> {

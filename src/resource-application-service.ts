@@ -46,6 +46,7 @@ import { expandIbgpDomain, normalizeIbgpDomain } from "./ibgp-domain.js";
 import { normalizeOspfDomain, ospfDomainNodeIds } from "./ospf.js";
 import type { SessionApplicationService } from "./session-application-service.js";
 import type { InventoryStore } from "./store.js";
+import { logger } from "./logger.js";
 
 interface ResourceApplicationServiceOptions {
   store: InventoryStore;
@@ -64,7 +65,14 @@ export function createResourceApplicationService(
   const store = options.store;
   const events = options.getEvents();
   const makeId = options.makeId;
-  const event = options.addEvent;
+  const event = (level: string, message: unknown, nodeId?: string | null): ChangeEvent => {
+    logger.info("记录资源变更", {
+      level,
+      nodeId: nodeId ?? null,
+      message: String(message ?? "").slice(0, 500),
+    });
+    return options.addEvent(level, message, nodeId);
+  };
   const withDeploymentLock = options.withDeploymentLock;
   const mutateAndApply = options.deploymentService.mutateAndApply.bind(options.deploymentService);
 
@@ -403,7 +411,7 @@ export function createResourceApplicationService(
   async deleteNode(nodeId, force) {
     const { state, node, forced } = await options.nodeOnboarding.decommission(nodeId, force);
     event(forced ? "warning" : "success", forced
-      ? `已强制遗忘受管节点 ${node.name}；远端配置和控制器公钥仍需手动清理`
+      ? `已强制删除受管节点 ${node.name}；远端配置和控制器公钥仍需手动清理`
       : `已清理远端配置并删除受管节点 ${node.name}`, nodeId);
     return {
       status: 200,
@@ -432,7 +440,7 @@ export function createResourceApplicationService(
       if (index < 0) fail(404, "远端 Peer 不存在");
       const previous = draft.peers[index];
       if (!previous) fail(404, "远端 Peer 不存在");
-      if (previous.managedBy?.kind === "ibgp-domain") fail(409, "该 Peer 由 iBGP 域托管，请在 iBGP 域工作区修改");
+      if (previous.managedBy?.kind === "ibgp-domain") fail(409, "该 Peer 由 iBGP 管理，请在 iBGP 管理中修改");
       const updated = normalizePeer({ ...previous, ...body, id: peerId, nodeId: previous.nodeId, managedBy: undefined });
       draft.peers[index] = updated;
       return updated;
@@ -444,7 +452,7 @@ export function createResourceApplicationService(
   async deletePeer(peerId) {
     const { state, result: peer } = await withDeploymentLock(() => store.mutate((draft) => {
       const target = findPeer(draft, peerId);
-      if (target.managedBy?.kind === "ibgp-domain") fail(409, "该 Peer 由 iBGP 域托管，请在 iBGP 域工作区删除邻接");
+      if (target.managedBy?.kind === "ibgp-domain") fail(409, "该 Peer 由 iBGP 管理，请在 iBGP 管理中删除邻接");
       if (draft.sessions.some((item) => item.peerId === target.id)) fail(409, "请先移除该 Peer 的会话");
       draft.peers = draft.peers.filter((item) => item.id !== target.id);
       return target;

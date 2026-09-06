@@ -234,14 +234,14 @@ docker compose ps
 
 不要使用 `docker compose down -v`，除非确定要删除全部数据库和控制器数据。
 
-## 节点退役
+## 删除节点
 
-在线节点的正常退役会先部署空的 Birdbox Include，再从库存删除节点。系统 BIRD 主配置中的 Include 行和目标用户 `authorized_keys` 中的控制器公钥仍需要人工删除。
+在线节点的删除会先部署空的 Birdbox Include，再从库存删除节点。系统 BIRD 主配置中的 Include 行和目标用户 `authorized_keys` 中的控制器公钥仍需要人工删除。
 
-如果节点永久离线，在节点编辑页面选择“强制遗忘”，并输入：
+如果节点永久离线，在节点编辑页面选择“强制删除”，并输入：
 
 ```text
-遗忘 <node.id>
+强制删除 <node.id>
 ```
 
 该操作会级联删除会话、Peer 和节点级资源，但不会连接远端清理配置。完成后请按页面清单手动删除主配置 Include、生成配置和控制器公钥。

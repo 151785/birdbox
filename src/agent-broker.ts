@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 
 import type { StateDatabase } from "./database.js";
 import { AGENT_METHODS, AGENT_PROTOCOL_VERSION, type AgentRegistration, type AgentTask, type AgentTaskResult } from "./agent-protocol.js";
+import { logger } from "./logger.js";
 
 export interface AgentBrokerOptions {
   database: StateDatabase;
@@ -88,6 +89,7 @@ export class AgentBroker {
     record.revokedAt = new Date().toISOString();
     await this.#persistCredentials();
     this.#agents.delete(nodeId);
+    logger.info("已撤销 Agent 凭据", { nodeId });
   }
 
   authenticate(nodeId: string, token: string): boolean {
@@ -113,7 +115,10 @@ export class AgentBroker {
       architecture: input.architecture ? String(input.architecture).slice(0, 80) : null,
       hostname: input.hostname ? String(input.hostname).slice(0, 255) : null,
     });
-    if (!previous || previous.agentVersion !== String(input.agentVersion || "unknown").slice(0, 80)) this.#onEvent("success", `Agent ${input.nodeId} 已注册`, input.nodeId);
+    if (!previous || previous.agentVersion !== String(input.agentVersion || "unknown").slice(0, 80)) {
+      logger.info("Agent 已注册", { nodeId: input.nodeId, version: String(input.agentVersion || "unknown").slice(0, 80) });
+      this.#onEvent("success", `Agent ${input.nodeId} 已注册`, input.nodeId);
+    }
     return { heartbeatIntervalSeconds: 15, protocolVersion: AGENT_PROTOCOL_VERSION };
   }
 
@@ -159,14 +164,26 @@ export class AgentBroker {
   }
 
   dispatch(nodeId: string, method: string, params: Record<string, unknown> = {}, timeoutMs = 120_000): Promise<AgentTaskResult> {
-    if (!AGENT_METHODS.has(method)) return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: `不支持的 Agent 方法：${method}`, code: "METHOD_NOT_ALLOWED" });
+    if (!AGENT_METHODS.has(method)) {
+      logger.warn("拒绝未知 Agent 方法", { nodeId, method });
+      return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: `不支持的 Agent 方法：${method}`, code: "METHOD_NOT_ALLOWED" });
+    }
     let serializedParams: string;
     try { serializedParams = JSON.stringify(params); } catch { return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务参数不可序列化", code: "INVALID_TASK" }); }
-    if (Buffer.byteLength(serializedParams, "utf8") > MAX_TASK_PARAMETER_BYTES) return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务参数过大", code: "TASK_TOO_LARGE" });
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 250 || timeoutMs > 10 * 60 * 1000) return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务超时设置不合法", code: "INVALID_TIMEOUT" });
+    if (Buffer.byteLength(serializedParams, "utf8") > MAX_TASK_PARAMETER_BYTES) {
+      logger.warn("拒绝过大的 Agent 任务参数", { nodeId, method });
+      return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务参数过大", code: "TASK_TOO_LARGE" });
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 250 || timeoutMs > 10 * 60 * 1000) {
+      logger.warn("拒绝不合法的 Agent 任务超时设置", { nodeId, method, timeoutMs });
+      return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务超时设置不合法", code: "INVALID_TIMEOUT" });
+    }
     const queue = this.#queues.get(nodeId) ?? [];
     const pendingForNode = [...this.#pending.values()].filter((item) => item.task.nodeId === nodeId).length;
-    if (queue.length + pendingForNode >= MAX_TASKS_PER_NODE) return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务队列已满", code: "TASK_QUEUE_FULL" });
+    if (queue.length + pendingForNode >= MAX_TASKS_PER_NODE) {
+      logger.warn("Agent 任务队列已满", { nodeId, method, queued: queue.length, pending: pendingForNode });
+      return Promise.resolve({ taskId: "", nodeId, ok: false, stdout: "", stderr: "Agent 任务队列已满", code: "TASK_QUEUE_FULL" });
+    }
     const now = Date.now();
     const task: AgentTask = { taskId: this.#makeId("agent_task"), nodeId, method, params, createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + timeoutMs).toISOString() };
     const waiter = this.#waiters.get(nodeId)?.shift();
@@ -177,7 +194,11 @@ export class AgentBroker {
       queue.push(task); this.#queues.set(nodeId, queue);
     }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => { this.#pending.delete(task.taskId); resolve({ taskId: task.taskId, nodeId, ok: false, stdout: "", stderr: "Agent 任务超时", code: "AGENT_TIMEOUT" }); }, timeoutMs);
+      const timer = setTimeout(() => {
+        this.#pending.delete(task.taskId);
+        logger.warn("Agent 任务超时", { nodeId, method, taskId: task.taskId, timeoutMs });
+        resolve({ taskId: task.taskId, nodeId, ok: false, stdout: "", stderr: "Agent 任务超时", code: "AGENT_TIMEOUT" });
+      }, timeoutMs);
       timer.unref(); this.#pending.set(task.taskId, { task, resolve, timer });
     });
   }
@@ -187,6 +208,7 @@ export class AgentBroker {
     const pending = this.#pending.get(input.taskId);
     if (!pending || pending.task.nodeId !== input.nodeId) return;
     clearTimeout(pending.timer); this.#pending.delete(input.taskId);
+    logger.info("收到 Agent 任务结果", { nodeId: input.nodeId, taskId: input.taskId, ok: input.ok, code: input.code === undefined ? null : String(input.code) });
     pending.resolve({ ...input, stdout: String(input.stdout ?? "").slice(0, 8 * 1024 * 1024), stderr: String(input.stderr ?? "").slice(0, 8 * 1024 * 1024) });
   }
 }

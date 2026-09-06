@@ -19,6 +19,7 @@ import { SessionApplicationService } from "./session-application-service.js";
 import { resolveApplicationRoot } from "./application-root.js";
 import { InventoryStore } from "./store.js";
 import { configureAgentBroker } from "./node-executor.js";
+import { errorContext, logger } from "./logger.js";
 
 function normalizeListenHost(value: unknown): string {
   const normalized = String(value ?? "").trim();
@@ -207,7 +208,7 @@ const app = await createHttpApplication({
 });
 
 await app.listen({ port, host });
-console.log(`Birdbox Demo listening on http://${host}:${port}`);
+logger.info("Birdbox 服务已启动", { host, port, version: appVersion });
 
 async function runIrrSchedule(): Promise<void> {
   if (irrSchedulerStopped || activeIrrSchedule) return;
@@ -219,7 +220,13 @@ async function runIrrSchedule(): Promise<void> {
       if (define.type === "expression" || define.entrySource.kind !== "irr-as-set" || !define.enabled) continue;
       const dueAt = define.sync.nextRefreshAt ? Date.parse(define.sync.nextRefreshAt) : 0;
       if (Number.isFinite(dueAt) && dueAt > now) continue;
-      try { await mutationService.syncIrrDefine(define.id); } catch (error) { console.error(`AS-SET Define ${define.id} 自动同步失败`, error); }
+      try {
+        logger.info("开始同步 AS-SET Define", { defineId: define.id });
+        await mutationService.syncIrrDefine(define.id);
+        logger.info("AS-SET Define 同步完成", { defineId: define.id });
+      } catch (error) {
+        logger.error("AS-SET Define 同步失败", { defineId: define.id, ...errorContext(error) });
+      }
     }
   })().finally(() => { activeIrrSchedule = null; });
   await activeIrrSchedule;
@@ -233,7 +240,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   irrSchedulerStopped = true;
   clearInterval(irrScheduleTimer);
-  console.log(`Received ${signal}, shutting down`);
+  logger.info("Birdbox 服务开始关闭", { signal });
   const forcedExit = setTimeout(() => process.exit(1), shutdownTimeoutMs);
   forcedExit.unref();
   const serverClosed = app.close();
@@ -248,7 +255,7 @@ async function shutdown(signal: string): Promise<void> {
     clearTimeout(forcedExit);
     process.exit(0);
   } catch (error) {
-    console.error(error);
+    logger.error("Birdbox 服务关闭失败", errorContext(error));
     process.exit(1);
   }
 }

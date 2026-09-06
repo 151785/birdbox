@@ -129,6 +129,8 @@ docker compose ps
 docker compose exec birdbox id
 ```
 
+Birdbox 控制器日志按 JSON 单行输出，包含时间、级别、操作、节点 ID、任务 ID 和耗时等字段，适合直接接入日志平台。日志不会记录 SSH 命令正文、控制器私钥、Agent 令牌或完整 BIRD 配置；页面里的变更日志只保留面向用户的关键变更。
+
 若 Birdbox 无法启动，先检查 `docker compose ps` 中 MySQL 是否为 `healthy`，再
 检查 `.env` 中的数据库名称、用户和密码是否一致。健康接口只检查控制器进程和
 数据库连通性，不代表所有远端 BGP 会话已 Established；登录后应在拓扑和会话状态
@@ -170,14 +172,14 @@ docker compose up -d
 旧 `data/ssh/`，从而沿用控制器 SSH 身份。只有库存中没有受管节点时，Birdbox 才会
 在该目录不存在时生成新密钥；已有节点时身份文件或对应主机指纹缺失会拒绝启动。
 
-## 节点退役
+## 删除节点
 
 从页面删除受管节点前，应先删除该节点的会话、Peer 和节点级资源。Birdbox 会先向
 目标应用空的受管 include，清除全局 RPKI 和策略声明，再提交库存删除。删除操作不会
-修改目标用户的 `authorized_keys` 或系统 BIRD 主配置；永久退役主机时，还应手动删除
+修改目标用户的 `authorized_keys` 或系统 BIRD 主配置；永久删除主机时，还应手动删除
 带 `restrict` 的 Birdbox 控制器公钥和相应的 `include` 行。
 
-节点永久离线且无法执行远端清理时，可在节点编辑框选择“强制遗忘”。该操作需要再次
-输入 `遗忘 <node.id>`，会级联删除其会话、Peer 和节点级资源，并返回 `cleanupRequired: true`。
+节点永久离线且无法执行远端清理时，可在节点编辑框选择“强制删除”。该操作需要再次
+输入 `强制删除 <node.id>`，会级联删除其会话、Peer 和节点级资源，并返回 `cleanupRequired: true`。
 它不会清理远端生成配置、主配置中的 include 行或 `authorized_keys` 中的控制器公钥；
 主机恢复或重新投入使用前必须人工完成这些清理。

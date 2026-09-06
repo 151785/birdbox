@@ -36,6 +36,7 @@ npx playwright install --with-deps chromium
 - 远端变更必须经过 `DeploymentService`，使用部署锁、恢复日志、预检、CAS 和回滚。
 - SSH 参数使用参数数组或标准输入传递；不得拼接到 shell 命令字符串。
 - 日志和错误响应不得输出 Cookie、控制器私钥、TCP-MD5/TCP-AO 密钥或完整敏感配置。
+- 核心执行路径使用 `src/logger.ts` 输出 JSON 单行日志；日志至少包含操作、节点、结果和耗时，错误信息必须经过截断和凭据脱敏。
 - 不新增 `if (pathname...)` 路径分发；按领域扩展 `src/http` 路由插件。
 - 关闭流程必须等待正在执行的部署事务，不能在远端已应用但库存未提交时退出。
 

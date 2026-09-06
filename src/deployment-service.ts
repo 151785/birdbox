@@ -14,6 +14,7 @@ import type { StateDatabase } from "./database.js";
 import { uniqueNodeIds } from "./resource-impact.js";
 import type { InventoryStore } from "./store.js";
 import type { NodeConfigBundle } from "./config-bundle.js";
+import { errorContext, logger } from "./logger.js";
 
 type UnknownRecord = Record<string, unknown>;
 type DeploymentDirection = "forward" | "rollback";
@@ -99,6 +100,7 @@ export class DeploymentService {
       if (journal.active) this.#options.fail(503, "存在尚未完成的部署恢复任务，请重启服务完成恢复");
       return { value: { version: 1, active } };
     });
+    logger.info("已创建部署恢复记录", { deploymentId: active.id, nodeCount: forwardTargets.length, nodeIds: forwardTargets.map((target) => target.node.id).join(",") });
     return active;
   }
 
@@ -123,6 +125,7 @@ export class DeploymentService {
       const journal = await this.readJournal();
       const active = journal.active;
       if (!active) return;
+      logger.warn("开始恢复未完成部署", { deploymentId: active.id, direction: active.direction });
       const actual = await this.#options.store.read();
       const desired = active.direction === "forward" ? active.after : active.before;
       const opposite = active.direction === "forward" ? active.before : active.after;
@@ -144,6 +147,7 @@ export class DeploymentService {
       if (!isDeepStrictEqual(actual, desired)) await this.#options.store.replace(actual, desired);
       await this.clearJournal(active);
       this.#options.addEvent("warning", `已完成中断部署 ${active.id} 的${active.direction === "forward" ? "提交" : "回滚"}恢复`);
+      logger.info("未完成部署恢复完成", { deploymentId: active.id, direction: active.direction });
     }, { allowPendingJournal: true });
   }
 
@@ -158,12 +162,14 @@ export class DeploymentService {
       let journal: ActiveDeploymentJournal | null = null;
       let current: Inventory | null = null;
       try {
+        logger.info("开始部署变更");
         current = await this.#options.store.read();
         const draft = structuredClone(current);
         const mutation = await mutator(draft);
         const inventory = validateInventory(draft);
         const nodeIds = uniqueNodeIds(typeof nodeIdsForDraft === "function" ? nodeIdsForDraft(mutation, inventory) : nodeIdsForDraft);
         const nodes = nodeIds.map((nodeId) => this.#options.findNode(inventory, nodeId));
+        logger.info("开始检查部署候选配置", { nodeCount: nodes.length, nodeIds: nodeIds.join(",") });
 
         for (const node of nodes) {
           const config = this.#options.configForNode(inventory, node);
@@ -176,6 +182,7 @@ export class DeploymentService {
           const target = journal?.forwardTargets.find((item) => item.node.id === node.id);
           const applied = await applyStagedConfig(node, target?.config ?? this.#options.configForNode(inventory, node));
           if (!applied.ok) this.#options.fail(500, applied.stderr || applied.stdout || `${node.name} 的 BIRD 配置应用失败`);
+          logger.info("节点配置已应用", { nodeId: node.id, nodeName: node.name });
           if (hooks.apply) await hooks.apply(node, inventory);
         }
         const state = await this.#options.store.replace(current, inventory);
@@ -184,8 +191,10 @@ export class DeploymentService {
           await this.clearJournal(journal);
           journal = null;
         }
+        logger.info("部署变更已提交", { nodeCount: nodes.length, nodeIds: nodeIds.join(",") });
         return { state, result: mutation, deployment: this.#report(inventory, nodeIds) };
       } catch (error) {
+        logger.error("部署变更失败", { ...errorContext(error), attemptedNodeIds: attemptedNodes.map((node) => node.id).join(",") });
         if (!committed) {
           let journalMarkedForRollback = false;
           if (journal) {
@@ -193,7 +202,7 @@ export class DeploymentService {
               await this.setJournalDirection(journal, "rollback");
               journalMarkedForRollback = true;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("部署回滚标记失败", { ...errorContext(journalError) });
             }
           }
           let rollbackSucceeded = true;
@@ -204,6 +213,7 @@ export class DeploymentService {
               rollbackSucceeded = false;
               this.#options.addEvent("error", `${node.name} 回滚失败：${rollback.stderr || rollback.stdout}`, node.id);
             }
+            else logger.info("节点配置已回滚", { nodeId: node.id, nodeName: node.name });
             if (hooks.rollback) {
               try {
                 await hooks.rollback(node, current!);
@@ -218,7 +228,7 @@ export class DeploymentService {
               await this.clearJournal(journal);
               journal = null;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("部署恢复记录清理失败", { ...errorContext(journalError) });
             }
           }
         }

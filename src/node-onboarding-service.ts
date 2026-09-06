@@ -27,6 +27,7 @@ import {
 } from "./inventory-domain.js";
 import type { InventoryStore } from "./store.js";
 import type { AgentBroker } from "./agent-broker.js";
+import { errorContext, logger } from "./logger.js";
 
 type ManagedSshNode = ManagedNode & {
   transport: "ssh";
@@ -655,15 +656,17 @@ export class NodeOnboardingService {
       ? (typeof body.id === "string" && body.id ? body.id : this.#options.makeId("node"))
       : undefined;
     const node = normalizeOnboardingNode(body, setupId ?? "node_onboarding");
+    logger.info("开始生成节点准备脚本", { nodeId: node.id, transport: node.transport });
     const inventory = await this.#options.store.read();
     const rpkiRequirements = globalRpkiFileRequirements(inventory);
     if (node.transport === "agent") {
       if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
       const token = await this.#options.agentBroker.issueToken(node.id);
       const script = agentSetupScript(node, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+      logger.info("节点 Agent 准备脚本已生成", { nodeId: node.id });
       return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
     }
-    return {
+    const payload = {
       status: 200,
       payload: {
         ...nodeSetupScript(node, this.#options.controllerPublicKey(), rpkiRequirements),
@@ -671,6 +674,8 @@ export class NodeOnboardingService {
         rpkiRequirements,
       },
     };
+    logger.info("节点 SSH 准备脚本已生成", { nodeId: node.id });
+    return payload;
   }
 
   async createAgentUpgradeScript(nodeId: string) {
@@ -682,6 +687,7 @@ export class NodeOnboardingService {
     const token = await this.#options.agentBroker.issueToken(node.id);
     const rpkiRequirements = globalRpkiFileRequirements(inventory);
     const script = agentSetupScript(agentNode, this.#options.agentControllerUrl ?? "http://127.0.0.1:3000", token, rpkiRequirements);
+    logger.info("节点 Agent 升级脚本已生成", { nodeId });
     return { status: 200, payload: { ...script, publicKey: "", agentToken: token, nodeId: node.id, rpkiRequirements } };
   }
 
@@ -689,6 +695,7 @@ export class NodeOnboardingService {
     if (!this.#options.agentBroker) fail(503, "Agent 通信服务尚未初始化");
     const current = await this.#options.store.read();
     const previous = findNode(current, nodeId);
+    logger.info("开始切换节点管理方式", { nodeId, from: previous.transport, to: "agent" });
     if (previous.transport === "agent") return { status: 200, payload: { node: previous, inventory: current, deployment: { applied: false, nodeIds: [], nodes: [], sessions: [] }, events: this.#options.getEvents() } };
     if (previous.transport !== "ssh") fail(409, "只有 SSH 节点可以切换到 Agent");
     if (!this.#options.agentBroker.status(nodeId)?.connected) fail(409, "Agent 尚未注册，不能切换管理方式");
@@ -714,14 +721,17 @@ export class NodeOnboardingService {
       },
     });
     this.#options.addEvent("success", `受管节点 ${candidate.name} 已切换为 Agent`, nodeId);
+    logger.info("节点已切换为 Agent", { nodeId });
     return { status: 200, payload: { node: candidate, inventory: state, deployment, events: this.#options.getEvents() } };
   }
 
   async test(body: Record<string, unknown>) {
     const node = normalizeOnboardingNode(body, typeof body.id === "string" ? body.id : "node_onboarding");
+    logger.info("开始检查节点接入条件", { nodeId: node.id, transport: node.transport });
     if (node.transport === "agent") {
       const status = this.#options.agentBroker?.status(node.id);
       if (!status?.connected) fail(422, "Agent 尚未连接主控，请先执行 Agent 安装脚本并等待注册");
+      logger.info("节点接入条件检查通过", { nodeId: node.id, transport: node.transport });
       return { status: 200, payload: { ok: true, node: { name: node.name, sshHost: null, sshPort: null, sshUser: null }, runtime: { version: status.agentVersion, bird2: true } } };
     }
     const verification = await this.#options.withDeploymentLock(async () => {
@@ -735,6 +745,7 @@ export class NodeOnboardingService {
         globalRpkiFileRequirements(current),
       );
     });
+    logger.info("节点接入条件检查通过", { nodeId: node.id, transport: node.transport });
     return {
       status: 200,
       payload: {
@@ -748,6 +759,7 @@ export class NodeOnboardingService {
   async create(body: Record<string, unknown>) {
     const requestedId = body.transport === "agent" && typeof body.id === "string" ? body.id : this.#options.makeId("node");
     const node = normalizeOnboardingNode(body, requestedId);
+    logger.info("开始添加受管节点", { nodeId: node.id, transport: node.transport });
     if (node.transport === "agent") {
       const broker = this.#options.agentBroker;
       if (!broker) fail(503, "Agent 通信服务尚未初始化");
@@ -756,6 +768,7 @@ export class NodeOnboardingService {
       const agentToken = broker.hasCredential(node.id) ? undefined : await broker.issueToken(node.id);
       const { state } = await this.#options.withDeploymentLock(() => this.#options.store.mutate((draft) => { draft.nodes.push(node); return node; }));
       this.#options.addEvent("success", `已添加 Agent 受管节点 ${node.name}，等待 Agent 注册`, node.id);
+      logger.info("Agent 受管节点已添加", { nodeId: node.id });
       return { status: 201, payload: { node, agentToken, inventory: state, deployment: { applied: false, nodeIds: [], nodes: [], sessions: [] }, events: this.#options.getEvents() } };
     }
     const { state, deployment } = await this.#options.deploymentService.mutateAndApply(async (draft) => {
@@ -764,6 +777,7 @@ export class NodeOnboardingService {
       return node;
     }, () => [node.id]);
     this.#options.addEvent("success", `已添加受管节点 ${node.name}`, node.id);
+    logger.info("受管节点已添加", { nodeId: node.id, transport: node.transport });
     return {
       status: 201,
       payload: { node, inventory: state, deployment, events: this.#options.getEvents() },
@@ -783,6 +797,7 @@ export class NodeOnboardingService {
         const current = await this.#options.store.read();
         node = findNode(current, nodeId);
         const targetNode = node;
+        logger.info(force ? "开始强制删除受管节点" : "开始删除受管节点", { nodeId: targetNode.id, transport: targetNode.transport });
         if (current.ibgpDomains.some((domain) => domain.members.some((member) => member.nodeId === targetNode.id))) {
           fail(409, "请先从 iBGP 域中移除该节点或删除对应域");
         }
@@ -802,6 +817,7 @@ export class NodeOnboardingService {
           const state = await this.#options.store.replace(current, inventory);
           committed = true;
           await this.#options.agentBroker?.revoke(targetNode.id);
+          logger.warn("受管节点已强制删除", { nodeId: targetNode.id });
           return { state, node: targetNode, forced: true };
         }
         if (
@@ -819,7 +835,7 @@ export class NodeOnboardingService {
           targetNode,
           renderBirdConfig(targetNode, [], [], [], [], [], [], [], []),
         );
-        if (!validation.ok) fail(422, validation.stderr || validation.stdout || "节点退役配置检查失败");
+        if (!validation.ok) fail(422, validation.stderr || validation.stdout || "节点删除配置检查失败");
         journal = await this.#options.deploymentService.beginJournal(
           current,
           inventory,
@@ -828,14 +844,16 @@ export class NodeOnboardingService {
         );
         applied = true;
         const result = await applyStagedConfig(targetNode);
-        if (!result.ok) fail(500, result.stderr || result.stdout || "节点退役配置应用失败");
+        if (!result.ok) fail(500, result.stderr || result.stdout || "节点删除配置应用失败");
         const state = await this.#options.store.replace(current, inventory);
         committed = true;
         await this.#options.agentBroker?.revoke(targetNode.id);
         await this.#options.deploymentService.clearJournal(journal);
         journal = null;
+        logger.info("受管节点已删除", { nodeId: targetNode.id });
         return { state, node: targetNode, forced: false };
       } catch (error) {
+        logger.error("删除受管节点失败", { nodeId: node?.id ?? nodeId, ...errorContext(error) });
         if (applied && !committed && node) {
           let journalMarkedForRollback = false;
           if (journal) {
@@ -843,14 +861,14 @@ export class NodeOnboardingService {
               await this.#options.deploymentService.setJournalDirection(journal, "rollback");
               journalMarkedForRollback = true;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("节点删除回滚标记失败", { ...errorContext(journalError) });
             }
           }
           const rollback = await rollbackNode(node);
           if (!rollback.ok) {
             this.#options.addEvent(
               "error",
-              `${node.name} 退役回滚失败：${rollback.stderr || rollback.stdout}`,
+              `${node.name} 删除回滚失败：${rollback.stderr || rollback.stdout}`,
               node.id,
             );
           } else if (journal && journalMarkedForRollback) {
@@ -858,7 +876,7 @@ export class NodeOnboardingService {
               await this.#options.deploymentService.clearJournal(journal);
               journal = null;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("节点删除恢复记录清理失败", { ...errorContext(journalError) });
             }
           }
         }

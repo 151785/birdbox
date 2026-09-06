@@ -8,6 +8,7 @@ import type { MutationService } from "../application-contracts.js";
 import type { AuthStore } from "../auth.js";
 import { fail, isPublicError, safeErrorMessage, type PublicError } from "../errors.js";
 import type { InventoryStore } from "../store.js";
+import { logger } from "../logger.js";
 import { authRoutes } from "./auth-routes.js";
 import type { AgentBroker } from "../agent-broker.js";
 import { agentRoutes } from "./agent-routes.js";
@@ -157,7 +158,15 @@ export async function createHttpApplication(options: HttpApplicationOptions) {
     const unexpected = !isPublicError(publicError);
     if (!authPath && !healthPath) options.addEvent("error", safeErrorMessage(publicError));
     if (healthPath) return sendJson(reply, 503, { status: "error" });
-    if (unexpected) console.error(publicError);
+    if (unexpected || (publicError.status ?? publicError.statusCode ?? 500) >= 500) {
+      logger.error("HTTP 请求处理失败", {
+        requestId: request.id,
+        method: request.method,
+        path: pathname,
+        status: publicError.status ?? publicError.statusCode ?? 500,
+        ...({ error: safeErrorMessage(publicError) }),
+      });
+    }
     const payload: ApiErrorResponse = { error: unexpected ? "服务器内部错误" : publicError.message };
     if (!unexpected && publicError.code) payload.code = publicError.code;
     if (!authPath && publicError.code !== "AUTH_REQUIRED") payload.events = options.getEvents();

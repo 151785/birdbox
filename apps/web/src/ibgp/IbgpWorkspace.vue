@@ -641,7 +641,7 @@ async function runPreview(): Promise<void> {
   } catch (cause) {
     previewValid.value = false;
     previewError.value =
-      cause instanceof Error ? cause.message : "iBGP 双端候选配置预检失败";
+      cause instanceof Error ? cause.message : "iBGP 两端配置预检失败";
   } finally {
     previewPending.value = false;
     if (previewQueued) {

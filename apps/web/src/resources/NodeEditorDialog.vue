@@ -295,7 +295,7 @@ async function retire(force: boolean): Promise<void> {
   const node = dashboard.value?.inventory.nodes.find((item) => item.id === editingId.value);
   if (!node) return;
   if (!force) {
-    if (!window.confirm(`安全退役节点 ${node.name}？Birdbox 将先清空远端受管 include；控制器公钥和主配置 include 行仍需手动删除。`)) return;
+    if (!window.confirm(`删除节点 ${node.name}？Birdbox 会先清空远端受管配置；控制器公钥和主配置中的 include 行仍需手动删除。`)) return;
   } else {
     const inventory = dashboard.value?.inventory;
     if (!inventory) return;
@@ -309,8 +309,8 @@ async function retire(force: boolean): Promise<void> {
       ["源地址出口", (inventory.sourcePolicies ?? []).filter((item) => resourceExplicitlyScopesNode(item, node.id)).length],
       ["Static", inventory.staticProtocols.filter((item) => item.nodeId === node.id).length],
     ].map(([label, count]) => `${label} ${count}`).join("、");
-    if (!window.confirm(`强制遗忘 ${node.name} (${node.sshHost}:${node.sshPort})？将处理关联资源：${counts}。多节点 Define/Function/Filter/RPKI 只会移除此节点的可用范围；操作不会清理远端配置。`)) return;
-    const confirmation = `遗忘 ${node.id}`;
+    if (!window.confirm(`强制删除 ${node.name} (${node.sshHost}:${node.sshPort})？将处理关联资源：${counts}。多节点 Define/Function/Filter/RPKI 只会移除此节点的可用范围；操作不会清理远端配置。`)) return;
+    const confirmation = `强制删除 ${node.id}`;
     if (window.prompt(`请输入“${confirmation}”以确认：`) !== confirmation) return;
   }
   pending.value = true;
@@ -401,8 +401,8 @@ onBeforeUnmount(() => {
       </div>
       <div class="dialog-actions split-actions">
         <div v-if="editing" id="nodeRetireActions" class="node-retire-actions">
-          <button id="deleteNodeButton" class="text-danger-button" type="button" :disabled="pending" @click="retire(false)">安全退役</button>
-          <details><summary>节点永久离线</summary><button id="forceDeleteNodeButton" class="text-danger-button" type="button" :disabled="pending" @click="retire(true)">强制遗忘</button></details>
+          <button id="deleteNodeButton" class="text-danger-button" type="button" :disabled="pending" @click="retire(false)">删除节点</button>
+          <details><summary>节点无法连接时删除</summary><button id="forceDeleteNodeButton" class="text-danger-button" type="button" :disabled="pending" @click="retire(true)">强制删除</button></details>
         </div>
         <span></span>
         <button class="secondary-button" type="button" data-close="nodeDialog" :disabled="pending" @click="close">取消</button>
@@ -413,7 +413,7 @@ onBeforeUnmount(() => {
 
   <dialog id="nodeCleanupDialog" ref="cleanupDialog" aria-labelledby="nodeCleanupDialogTitle">
     <form method="dialog">
-      <div class="dialog-head"><span class="dialog-icon managed">!</span><div><p class="eyebrow">需要人工清理</p><h2 id="nodeCleanupDialogTitle">{{ cleanupForced ? "节点已强制遗忘" : "节点已安全退役，仍需人工清理" }}</h2></div></div>
+      <div class="dialog-head"><span class="dialog-icon managed">!</span><div><p class="eyebrow">需要人工清理</p><h2 id="nodeCleanupDialogTitle">{{ cleanupForced ? "节点已强制删除" : "节点已删除，仍需人工清理" }}</h2></div></div>
       <p id="nodeCleanupTarget" class="dialog-note">SSH {{ cleanupNode?.sshUser ? `${cleanupNode.sshUser}@` : "" }}{{ cleanupNode?.sshHost }}:{{ cleanupNode?.sshPort }} · 主配置 {{ cleanupNode?.mainConfigPath }} · 生成配置 {{ cleanupNode?.generatedConfigPath }} · Socket {{ cleanupNode?.socketPath }}</p>
       <ul class="cleanup-list"><li>先从主配置移除 include 行并执行 BIRD configure check/configure</li><li>再删除远端生成配置，最后从 authorized_keys 删除控制器公钥</li><li v-if="cleanupNode?.mainConfigPath === '/etc/bird.conf'">OpenWrt 节点还需移除 /etc/init.d/bird 启动命令中的 Birdbox 管理组参数并重启 BIRD</li><li>重新纳管或复用主机前核对 BIRD 当前配置</li></ul>
       <div class="dialog-actions"><button class="primary-button" value="default">我已记录</button></div>

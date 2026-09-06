@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -104,13 +105,20 @@ func hostname() string { h, _ := os.Hostname(); return h }
 func (c *Client) RunPoll(ctx context.Context) error {
 	var response pollResponse
 	if err := c.request(ctx, http.MethodPost, "/api/agent/tasks/poll", map[string]any{"nodeId": c.cfg.NodeID}, &response); err != nil {
+		log.Printf("agent poll failed node_id=%s error=%v", c.cfg.NodeID, err)
 		return err
 	}
 	if response.Task == nil {
 		return nil
 	}
+	log.Printf("agent task started node_id=%s task_id=%s method=%s", c.cfg.NodeID, response.Task.TaskID, response.Task.Method)
 	r := executeTask(ctx, *response.Task)
-	return c.request(ctx, http.MethodPost, "/api/agent/tasks/"+response.Task.TaskID+"/result", r, nil)
+	log.Printf("agent task finished node_id=%s task_id=%s method=%s ok=%t code=%v", c.cfg.NodeID, response.Task.TaskID, response.Task.Method, r.OK, r.Code)
+	if err := c.request(ctx, http.MethodPost, "/api/agent/tasks/"+response.Task.TaskID+"/result", r, nil); err != nil {
+		log.Printf("agent task result delivery failed node_id=%s task_id=%s error=%v", c.cfg.NodeID, response.Task.TaskID, err)
+		return err
+	}
+	return nil
 }
 
 func executeTask(parent context.Context, t task) result {

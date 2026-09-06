@@ -18,6 +18,7 @@ import type { ActiveDeploymentJournal, DeploymentService } from "./deployment-se
 import { fail, optionalRecord, record, safeErrorMessage, type UnknownRecord } from "./errors.js";
 import { configForNode, findNode, findPeer, findPolicyResource } from "./inventory-domain.js";
 import type { InventoryStore } from "./store.js";
+import { errorContext, logger } from "./logger.js";
 
 interface PreparedSession {
   inventory: Inventory;
@@ -50,19 +51,27 @@ export class SessionApplicationService {
   }
 
   async preview(body: Record<string, unknown>) {
-    const staged = await this.#options.withDeploymentLock(async () =>
-      this.#stageSession(await this.#options.store.read(), body),
-    );
-    return {
-      status: staged.valid ? 200 : 422,
-      payload: {
-        valid: staged.valid,
-        session: staged.session,
-        config: staged.config,
-        validation: staged.validation,
-        events: this.#options.getEvents(),
-      },
-    };
+    const startedAt = Date.now();
+    logger.info("开始预检会话配置");
+    try {
+      const staged = await this.#options.withDeploymentLock(async () =>
+        this.#stageSession(await this.#options.store.read(), body),
+      );
+      logger.info("会话配置预检完成", { valid: staged.valid, durationMs: Date.now() - startedAt });
+      return {
+        status: staged.valid ? 200 : 422,
+        payload: {
+          valid: staged.valid,
+          session: staged.session,
+          config: staged.config,
+          validation: staged.validation,
+          events: this.#options.getEvents(),
+        },
+      };
+    } catch (error) {
+      logger.error("会话配置预检异常", { durationMs: Date.now() - startedAt, ...errorContext(error) });
+      throw error;
+    }
   }
 
   async apply(body: Record<string, unknown>) {
@@ -72,13 +81,14 @@ export class SessionApplicationService {
     let journal: ActiveDeploymentJournal | null = null;
     return this.#options.withDeploymentLock(async () => {
       try {
+        logger.info("开始应用会话配置");
         const currentInventory = await this.#options.store.read();
         staged = await this.#stageSession(currentInventory, body);
         if (!staged.valid) {
           return {
             status: 422,
             payload: {
-              error: "候选配置检查失败",
+              error: "配置预检失败",
               ...staged,
               events: this.#options.getEvents(),
             },
@@ -113,6 +123,7 @@ export class SessionApplicationService {
           };
         }
         this.#options.addEvent("success", `会话 ${staged.session.protocolName} 配置已应用`, staged.node.id);
+        logger.info("会话配置已应用", { nodeId: staged.node.id, sessionId: staged.session.id, enabled: staged.session.enabled });
         return {
           status: 202,
           payload: {
@@ -126,6 +137,7 @@ export class SessionApplicationService {
           },
         };
       } catch (error) {
+        logger.error("应用会话配置失败", { nodeId: staged?.node?.id ?? null, ...errorContext(error) });
         this.#options.addEvent("error", safeErrorMessage(error), staged?.node?.id ?? null);
         if (applied && !committed && staged?.node) {
           let journalMarkedForRollback = false;
@@ -134,7 +146,7 @@ export class SessionApplicationService {
               await this.#options.deploymentService.setJournalDirection(journal, "rollback");
               journalMarkedForRollback = true;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("会话应用回滚标记失败", { ...errorContext(journalError) });
             }
           }
           const rollback = await rollbackNode(staged.node);
@@ -148,7 +160,7 @@ export class SessionApplicationService {
               await this.#options.deploymentService.clearJournal(journal);
               journal = null;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("会话应用恢复记录清理失败", { ...errorContext(journalError) });
             }
           }
         }
@@ -164,17 +176,18 @@ export class SessionApplicationService {
     let journal: ActiveDeploymentJournal | null = null;
     return this.#options.withDeploymentLock(async () => {
       try {
+        logger.info("开始删除会话", { sessionId });
         const state = await this.#options.store.read();
         const session = state.sessions.find((item) => item.id === sessionId);
         if (!session) fail(404, "会话不存在");
-        if (session.managedBy?.kind === "ibgp-domain") fail(409, "该会话由 iBGP 域托管，请在 iBGP 域工作区删除邻接");
+        if (session.managedBy?.kind === "ibgp-domain") fail(409, "该会话由 iBGP 管理，请在 iBGP 管理中删除邻接");
         node = findNode(state, session.nodeId);
         const candidate = validateInventory({
           ...state,
           sessions: state.sessions.filter((item) => item.id !== session.id),
         });
         const validation = await stageAndValidate(node, configForNode(candidate, node));
-        if (!validation.ok) fail(422, validation.stderr || "候选配置检查失败");
+        if (!validation.ok) fail(422, validation.stderr || "配置预检失败");
         journal = await this.#options.deploymentService.beginJournal(state, candidate, [node.id], [node]);
         applied = true;
         const result = await applyStagedConfig(node);
@@ -184,8 +197,10 @@ export class SessionApplicationService {
         await this.#options.deploymentService.clearJournal(journal);
         journal = null;
         this.#options.addEvent("success", `已移除会话 ${session.protocolName}`, node.id);
+        logger.info("会话已删除", { nodeId: node.id, sessionId: session.id });
         return { status: 200, payload: { inventory: candidate, events: this.#options.getEvents() } };
       } catch (error) {
+        logger.error("删除会话失败", { sessionId, nodeId: node?.id ?? null, ...errorContext(error) });
         if (applied && !committed && node) {
           let journalMarkedForRollback = false;
           if (journal) {
@@ -193,7 +208,7 @@ export class SessionApplicationService {
               await this.#options.deploymentService.setJournalDirection(journal, "rollback");
               journalMarkedForRollback = true;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("会话删除回滚标记失败", { ...errorContext(journalError) });
             }
           }
           const rollback = await rollbackNode(node);
@@ -204,7 +219,7 @@ export class SessionApplicationService {
               await this.#options.deploymentService.clearJournal(journal);
               journal = null;
             } catch (journalError) {
-              console.error(journalError);
+              logger.error("会话删除恢复记录清理失败", { ...errorContext(journalError) });
             }
           }
         }
@@ -218,7 +233,7 @@ export class SessionApplicationService {
     const node = findNode(state, String(payload.nodeId ?? ""));
     const peer = findPeer(state, String(payload.peerId ?? ""));
     if (peer.nodeId !== node.id) fail(400, "所选 Peer 不属于该节点");
-    if (peer.managedBy?.kind === "ibgp-domain") fail(409, "该会话由 iBGP 域托管，请在 iBGP 域工作区同时修改双方配置");
+    if (peer.managedBy?.kind === "ibgp-domain") fail(409, "该会话由 iBGP 域管理，请在 iBGP 管理中同时修改两端配置");
     const requestedChannels = payload.channels
       && typeof payload.channels === "object"
       && !Array.isArray(payload.channels)

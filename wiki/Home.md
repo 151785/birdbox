@@ -58,7 +58,7 @@ flowchart LR
 | --- | --- |
 | [[部署与初始化]] | Compose、环境变量、HTTPS、首次初始化 |
 | [[界面、主题与账户]] | 主题、状态、密码、多登录会话 |
-| [[节点接入与退役]] | 准备脚本、known_hosts、更新和退役 |
+| [[节点接入与退役]] | 准备脚本、known_hosts、更新和删除 |
 | [[Peer 与 BGP 会话]] | Peer、会话、Address Family、策略和启停 |
 | [[路由策略与资源]] | Define、Function、Filter、作用域、顺序和引用 |
 | [[Static 路由]] | 逐前缀动作、Import/Export 和冲突规则 |

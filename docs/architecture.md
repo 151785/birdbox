@@ -29,7 +29,7 @@ src/node-executor.ts      受管节点本机/SSH 执行器、连接参数和进�
 src/deployment-service.ts  部署锁内的预检、恢复日志、提交和回滚
 src/inventory-domain.ts    库存查找、资源作用域、引用检查和节点配置生成
 src/controller-ssh.ts      控制器 SSH 身份、密钥权限和 known_hosts 信任
-src/node-onboarding-service.ts 节点接入、接入检查、准备脚本和退役
+src/node-onboarding-service.ts 节点接入、接入检查、准备脚本和删除
 src/dashboard-service.ts   Dashboard 选择、运行状态和库存健康汇总
 src/session-application-service.ts 会话候选配置、预检、应用、等待和删除
 src/resource-application-service.ts 节点、Peer、策略、Static、RPKI 写用例

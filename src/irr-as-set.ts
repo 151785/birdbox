@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import { normalizeBirdPrefixPattern } from "./bird-prefix.js";
 import { isIrrAsSetName, normalizeIrrAsSetName } from "./irr-name.js";
+import { errorContext, logger } from "./logger.js";
 
 export interface IrrResolveRequest {
   family: 4 | 6;
@@ -69,40 +70,49 @@ export function parseBgpq4Json(output: string, requestInput: IrrResolveRequest):
 
 export async function resolveIrrAsSet(requestInput: IrrResolveRequest, timeoutMs = 45_000): Promise<IrrResolveResult> {
   const request = normalizeIrrResolveRequest(requestInput);
+  const startedAt = Date.now();
+  logger.info("开始展开 IRR AS-SET", { asSet: request.asSet, family: request.family, server: request.server, timeoutMs });
   const args = ["-h", request.server];
   if (request.databases.length) args.push("-S", request.databases.join(","));
   args.push(request.family === 4 ? "-4" : "-6", "-j", "-l", "birdbox_prefixes", request.asSet);
-  const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn("bgpq4", args, { stdio: ["ignore", "pipe", "pipe"] });
-    const chunks: Buffer[] = [];
-    const errors: Buffer[] = [];
-    let size = 0;
-    let settled = false;
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      if (!settled) reject(Object.assign(new Error("bgpq4 展开超时"), { status: 504 }));
-      settled = true;
-    }, timeoutMs);
-    const collect = (target: Buffer[], chunk: Buffer): void => {
-      size += chunk.length;
-      if (size > MAX_OUTPUT_BYTES) child.kill("SIGKILL");
-      else target.push(chunk);
-    };
-    child.stdout.on("data", (chunk: Buffer) => collect(chunks, chunk));
-    child.stderr.on("data", (chunk: Buffer) => collect(errors, chunk));
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      if (!settled) reject(Object.assign(new Error(error.message.includes("ENOENT") ? "控制器未安装 bgpq4" : error.message), { status: 503 }));
-      settled = true;
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn("bgpq4", args, { stdio: ["ignore", "pipe", "pipe"] });
+      const chunks: Buffer[] = [];
+      const errors: Buffer[] = [];
+      let size = 0;
+      let settled = false;
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        if (!settled) reject(Object.assign(new Error("bgpq4 展开超时"), { status: 504 }));
+        settled = true;
+      }, timeoutMs);
+      const collect = (target: Buffer[], chunk: Buffer): void => {
+        size += chunk.length;
+        if (size > MAX_OUTPUT_BYTES) child.kill("SIGKILL");
+        else target.push(chunk);
+      };
+      child.stdout.on("data", (chunk: Buffer) => collect(chunks, chunk));
+      child.stderr.on("data", (chunk: Buffer) => collect(errors, chunk));
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        if (!settled) reject(Object.assign(new Error(error.message.includes("ENOENT") ? "控制器未安装 bgpq4" : error.message), { status: 503 }));
+        settled = true;
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        if (size > MAX_OUTPUT_BYTES) return reject(Object.assign(new Error("bgpq4 输出超过 16 MiB 安全上限"), { status: 413 }));
+        if (code !== 0) return reject(Object.assign(new Error(Buffer.concat(errors).toString("utf8").trim() || `bgpq4 退出码 ${code}`), { status: 502 }));
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
     });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      if (settled) return;
-      settled = true;
-      if (size > MAX_OUTPUT_BYTES) return reject(Object.assign(new Error("bgpq4 输出超过 16 MiB 安全上限"), { status: 413 }));
-      if (code !== 0) return reject(Object.assign(new Error(Buffer.concat(errors).toString("utf8").trim() || `bgpq4 退出码 ${code}`), { status: 502 }));
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-  });
-  return { ...parseBgpq4Json(output, request), command: ["bgpq4", ...args] };
+    const result = { ...parseBgpq4Json(output, request), command: ["bgpq4", ...args] };
+    logger.info("IRR AS-SET 展开完成", { asSet: request.asSet, family: request.family, entries: result.entries.length, durationMs: Date.now() - startedAt });
+    return result;
+  } catch (error) {
+    logger.error("IRR AS-SET 展开失败", { asSet: request.asSet, family: request.family, durationMs: Date.now() - startedAt, ...errorContext(error) });
+    throw error;
+  }
 }
