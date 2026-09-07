@@ -22,6 +22,7 @@ Birdbox 的迁移必须原位兼容现有用户数据。禁止要求用户清空
 - 已存在的多会话认证、密码 hash 参数和会话来源信息必须保留。
 - 已存在的 SSH 私钥和 `known_hosts` 必须原样沿用，不得静默生成新身份或重新信任主机。
 - 高于当前程序支持版本的数据必须拒绝写入，不能尝试降级规范化。
+- Direct/Kernel 兼容特别规则：历史 `ManagedNode.directProtocol` 与 `ManagedNode.kernelProtocol` 仅保留用于读取旧表单和识别历史数据，绝不能在迁移、启动、Dashboard 读取或配置渲染时隐式转换为 `directProtocols`/`kernelProtocols` 资源。缺少资源数组等价于空数组；仅当数组中已有显式资源时才继续渲染和部署。该规则用于防止升级后每节点凭空出现协议、名称冲突和路由故障。
 
 ## 升级函数规则
 

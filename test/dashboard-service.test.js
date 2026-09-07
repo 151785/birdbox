@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chooseEbgpSelection } from "../src/dashboard-service.js";
+import { chooseEbgpSelection, inspectNodeForDashboard } from "../src/dashboard-service.js";
 
 test("excludes iBGP-managed peers from the eBGP dashboard selection", () => {
   const state = {
@@ -31,4 +31,11 @@ test("excludes iBGP-managed peers from the eBGP dashboard selection", () => {
   const iBGPOnly = chooseEbgpSelection({ ...state, peers: [state.peers[1]], sessions: [state.sessions[1]] }, "local", null);
   assert.deepEqual(iBGPOnly.peers, []);
   assert.equal(iBGPOnly.peer, null);
+});
+
+test("降级节点状态检查错误而不拒绝 Dashboard", async () => {
+  const runtime = await inspectNodeForDashboard({ id: "broken", transport: "invalid" });
+  assert.equal(runtime.nodeId, "broken");
+  assert.equal(runtime.reachable, false);
+  assert.match(runtime.error ?? "", /节点状态检查失败|transport|管理/);
 });

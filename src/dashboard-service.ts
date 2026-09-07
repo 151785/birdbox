@@ -23,6 +23,45 @@ interface DashboardServiceOptions {
   getEvents(): ChangeEvent[];
 }
 
+// Dashboard health is best-effort. A single offline/black-holed node must not
+// hold the whole controller request open (or reject the dashboard altogether).
+// Keep the timeout below the HTTP read timeout and convert failures into the
+// same runtime shape used by the normal inspector.
+const DASHBOARD_NODE_INSPECT_TIMEOUT_MS = 5_000;
+
+export async function inspectNodeForDashboard(node: ManagedNode): Promise<NodeRuntime> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      inspectNode(node),
+      new Promise<NodeRuntime>((resolve) => {
+        timer = setTimeout(() => resolve({
+          nodeId: node.id,
+          reachable: false,
+          bird2: false,
+          version: null,
+          protocols: [],
+          error: "节点状态检查超时",
+          raw: "",
+        }), DASHBOARD_NODE_INSPECT_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    return {
+      nodeId: node.id,
+      reachable: false,
+      bird2: false,
+      version: null,
+      protocols: [],
+      error: error instanceof Error ? error.message.slice(0, 500) : "节点状态检查失败",
+      raw: "",
+    };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function protocolFor(
   runtime: Pick<NodeRuntime, "protocols">,
   protocolName: string,
@@ -147,7 +186,7 @@ export class DashboardService {
       };
     }
     const selectedNode = selection.node;
-    const runtimes = await Promise.all(state.nodes.map((node) => inspectNode(node)));
+    const runtimes = await Promise.all(state.nodes.map((node) => inspectNodeForDashboard(node)));
     const runtime = runtimes.find((item) => item.nodeId === selectedNode.id) ?? {
       nodeId: selectedNode.id,
       reachable: false,

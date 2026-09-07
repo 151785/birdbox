@@ -95,6 +95,7 @@ const eventLog = new ChangeEventLog();
 
 let deploymentLocked = false;
 let activeDeployment: Promise<unknown> | null = null;
+const nodeOperationLocks = new Set<string>();
 let shuttingDown = false;
 let deploymentService: DeploymentService;
 
@@ -117,6 +118,21 @@ async function withDeploymentLock<Result>(
   } finally {
     if (activeDeployment === deployment) activeDeployment = null;
     deploymentLocked = false;
+  }
+}
+
+/** Runtime operations such as enabling/disabling one protocol only lock that node. */
+async function withNodeOperationLock<Result>(
+  nodeId: string,
+  operation: () => Promise<Result> | Result,
+): Promise<Result> {
+  const key = String(nodeId);
+  if (!key || nodeOperationLocks.has(key)) fail(409, "该节点已有操作正在进行，请稍候");
+  nodeOperationLocks.add(key);
+  try {
+    return await operation();
+  } finally {
+    nodeOperationLocks.delete(key);
   }
 }
 
@@ -200,6 +216,7 @@ const app = await createHttpApplication({
   isDeploymentLocked: () => deploymentLocked,
   loadDashboard: async (nodeId, peerId) => dashboardService.load(await store.read(), nodeId, peerId),
   withDeploymentLock,
+  withNodeOperationLock,
   mutationService,
   addEvent,
   getEvents,

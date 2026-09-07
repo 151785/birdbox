@@ -14,6 +14,7 @@ interface SessionRuntimeRoutesOptions {
   secureCookieSetting: boolean | null;
   store: InventoryStore;
   withDeploymentLock<Result>(operation: () => Promise<Result> | Result): Promise<Result>;
+  withNodeOperationLock<Result>(nodeId: string, operation: () => Promise<Result> | Result): Promise<Result>;
   addEvent(level: string, message: unknown, nodeId?: string | null): ChangeEvent;
   getEvents(): ChangeEvent[];
 }
@@ -185,7 +186,10 @@ export const sessionRuntimeRoutes: FastifyPluginAsync<SessionRuntimeRoutesOption
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.params.sessionId)) throw routeError(404, "接口不存在");
     const action = String(jsonBody(request).action ?? "").trim().toLowerCase();
     if (action !== "enable" && action !== "disable") throw routeError(400, "BGP 协议动作只能是 enable 或 disable");
-    const control = await options.withDeploymentLock(async () => {
+    const stateForLock = await options.store.read();
+    const sessionForLock = stateForLock.sessions.find((item) => item.id === request.params.sessionId);
+    if (!sessionForLock) throw routeError(404, "会话不存在");
+    const control = await options.withNodeOperationLock(sessionForLock.nodeId, async () => {
       const state = await options.store.read();
       const session = state.sessions.find((item) => item.id === request.params.sessionId);
       if (!session) throw routeError(404, "会话不存在");

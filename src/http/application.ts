@@ -26,6 +26,7 @@ interface HttpApplicationOptions {
   isDeploymentLocked(): boolean;
   loadDashboard(nodeId: string | null, peerId: string | null): Promise<DashboardResponse>;
   withDeploymentLock<Result>(operation: () => Promise<Result> | Result): Promise<Result>;
+  withNodeOperationLock<Result>(nodeId: string, operation: () => Promise<Result> | Result): Promise<Result>;
   mutationService: MutationService;
   addEvent(level: string, message: unknown, nodeId?: string | null): ChangeEvent;
   getEvents(): ChangeEvent[];
@@ -193,6 +194,7 @@ export async function createHttpApplication(options: HttpApplicationOptions) {
     secureCookieSetting: options.secureCookieSetting,
     store: options.store,
     withDeploymentLock: options.withDeploymentLock,
+    withNodeOperationLock: options.withNodeOperationLock,
     addEvent: options.addEvent,
     getEvents: options.getEvents,
   });
