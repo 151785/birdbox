@@ -94,8 +94,6 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
   const filters = list(input, "filters").map(normalizePolicyFilter);
   const rpki = list(input, "rpki").map(normalizeRPKISource);
   let staticProtocols = list(input, "staticProtocols").map(normalizeStaticProtocol);
-  const hasDirectProtocols = input.directProtocols !== undefined;
-  const hasKernelProtocols = input.kernelProtocols !== undefined;
   const directProtocols = list(input, "directProtocols").map((item) => normalizeDirectProtocol(item));
   const kernelProtocols = list(input, "kernelProtocols").map((item) => normalizeKernelProtocol(item));
   const sourcePolicies = list(input, "sourcePolicies").map(normalizeSourcePolicyEgress);
@@ -122,12 +120,11 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
   assertValidation(new Set(allIbgpAdjacencies.map((item) => item.id)).size === allIbgpAdjacencies.length, "跨 iBGP 域的邻接 ID 重复");
 
   const nodeMap = new Map(nodes.map((item) => [item.id, item]));
-  const normalizedDirectProtocols: DirectProtocol[] = hasDirectProtocols
-    ? directProtocols
-    : nodes.map((node) => normalizeDirectProtocol({ id: `direct_${node.id}`, label: `${node.name} Direct`, name: node.directProtocol.name, nodeId: node.id, interfaces: node.directProtocol.interfaces, ipv4: node.directProtocol.ipv4, ipv6: node.directProtocol.ipv6, enabled: node.directProtocol.enabled }));
-  const normalizedKernelProtocols: KernelProtocol[] = hasKernelProtocols
-    ? kernelProtocols
-    : nodes.map((node) => normalizeKernelProtocol({ id: `kernel_${node.id}`, label: `${node.name} Kernel`, name: node.kernelProtocol.name, nodeIds: [node.id], ipv4: node.kernelProtocol.ipv4, ipv6: node.kernelProtocol.ipv6, importPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.import }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.export }, table: node.kernelProtocol.table, scanTime: node.kernelProtocol.scanTime, persist: node.kernelProtocol.persist, enabled: node.kernelProtocol.enabled }));
+  // Direct/Kernel are explicit resources. Legacy node-level protocol options
+  // remain readable for compatibility, but must not implicitly create resources
+  // during inventory migration or config rendering.
+  const normalizedDirectProtocols: DirectProtocol[] = directProtocols;
+  const normalizedKernelProtocols: KernelProtocol[] = kernelProtocols;
   assertValidation(new Set(normalizedDirectProtocols.map((item) => item.id)).size === normalizedDirectProtocols.length, "Direct 资源 ID 重复");
   assertValidation(new Set(normalizedKernelProtocols.map((item) => item.id)).size === normalizedKernelProtocols.length, "Kernel 资源 ID 重复");
   for (const resource of normalizedDirectProtocols) assertValidation(nodeMap.has(resource.nodeId), `Direct 资源 ${resource.name} 引用了不存在的节点`);

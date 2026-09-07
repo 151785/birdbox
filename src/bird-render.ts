@@ -637,12 +637,10 @@ export function renderBirdConfig(
   const defines = defineInputs.map(normalizeDefine).filter((item) => item.enabled);
   const functions = functionInputs.map(normalizePolicyFunction).filter((item) => item.enabled);
   const filters = filterInputs.map(normalizePolicyFilter).filter((item) => item.enabled);
-  const directResources = directInputs !== undefined
-    ? directInputs.map(normalizeDirectProtocol).filter((item) => item.enabled)
-    : [normalizeDirectProtocol({ id: `direct_${node.id}`, label: `${node.name} Direct`, name: node.directProtocol.name, nodeId: node.id, interfaces: node.directProtocol.interfaces, ipv4: node.directProtocol.ipv4, ipv6: node.directProtocol.ipv6, enabled: node.directProtocol.enabled })];
-  const kernelResources = kernelInputs !== undefined
-    ? kernelInputs.map(normalizeKernelProtocol).filter((item) => item.enabled)
-    : [normalizeKernelProtocol({ id: `kernel_${node.id}`, label: `${node.name} Kernel`, name: node.kernelProtocol.name, nodeIds: [node.id], ipv4: node.kernelProtocol.ipv4, ipv6: node.kernelProtocol.ipv6, importPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.import }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: node.kernelProtocol.export }, table: node.kernelProtocol.table, scanTime: node.kernelProtocol.scanTime, persist: node.kernelProtocol.persist, enabled: node.kernelProtocol.enabled })];
+  // Direct and Kernel protocols are managed as explicit resources. An omitted
+  // resource list means no generated protocol, preserving legacy inventories.
+  const directResources = (directInputs ?? []).map(normalizeDirectProtocol).filter((item) => item.enabled);
+  const kernelResources = (kernelInputs ?? []).map(normalizeKernelProtocol).filter((item) => item.enabled);
   const rpki = rpkiInputs.map(normalizeRPKISource).filter((item) => item.enabled && resourceAppliesToNode(item, node.id));
   const staticProtocols = staticInputs.map(normalizeStaticProtocol).filter((item) => item.enabled && item.nodeId === node.id);
   const sourcePolicies = sourcePolicyInputs.map(normalizeSourcePolicyEgress)
