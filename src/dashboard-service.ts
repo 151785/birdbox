@@ -30,23 +30,8 @@ interface DashboardServiceOptions {
 const DASHBOARD_NODE_INSPECT_TIMEOUT_MS = 5_000;
 
 export async function inspectNodeForDashboard(node: ManagedNode): Promise<NodeRuntime> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      inspectNode(node),
-      new Promise<NodeRuntime>((resolve) => {
-        timer = setTimeout(() => resolve({
-          nodeId: node.id,
-          reachable: false,
-          bird2: false,
-          version: null,
-          protocols: [],
-          error: "节点状态检查超时",
-          raw: "",
-        }), DASHBOARD_NODE_INSPECT_TIMEOUT_MS);
-        timer.unref?.();
-      }),
-    ]);
+    return await inspectNode(node, DASHBOARD_NODE_INSPECT_TIMEOUT_MS);
   } catch (error) {
     return {
       nodeId: node.id,
@@ -57,8 +42,6 @@ export async function inspectNodeForDashboard(node: ManagedNode): Promise<NodeRu
       error: error instanceof Error ? error.message.slice(0, 500) : "节点状态检查失败",
       raw: "",
     };
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

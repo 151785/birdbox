@@ -4,7 +4,7 @@ import type { PolicyCollection } from "../../packages/contracts/src/inventory.js
 import type { MutationResult, MutationService } from "../application-contracts.js";
 import type { AuthStore } from "../auth.js";
 import { requestSessionToken, sessionCookie } from "./auth-routes.js";
-import type { AgentBroker } from "../agent-broker.js";
+import type { AgentBatchUpgradeInput, AgentBroker } from "../agent-broker.js";
 
 interface MutationRoutesOptions {
   authStore: AuthStore;
@@ -85,15 +85,50 @@ export const mutationRoutes: FastifyPluginAsync<MutationRoutesOptions> = async (
   app.post("/api/nodes", async (request, reply) => jsonReply(reply, await options.service.createNode(jsonBody(request))));
   app.put<{ Params: { nodeId: string } }>("/api/nodes/:nodeId", async (request, reply) => jsonReply(reply, await options.service.updateNode(validId(request.params.nodeId), jsonBody(request))));
   app.delete<{ Params: { nodeId: string }; Querystring: { force?: string } }>("/api/nodes/:nodeId", async (request, reply) => jsonReply(reply, await options.service.deleteNode(validId(request.params.nodeId), request.query.force === "true")));
-  app.get("/api/agent/status", async (_request, reply) => reply.send({ agents: options.agentBroker.statuses() }));
+  app.get("/api/agent/status", async (_request, reply) => reply.header("cache-control", "no-store").send({ agents: options.agentBroker.statuses() }));
+  app.get("/api/agent/upgrades/batch", async (_request, reply) => reply.header("cache-control", "no-store").send({ job: options.agentBroker.batchUpgradeStatus() }));
+  app.post("/api/agent/upgrades/batch", async (request, reply) => {
+    const body = jsonBody(request);
+    const raw = body.nodes;
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > 100) {
+      throw routeError(400, "请选择 1 至 100 个 Agent 节点", "INVALID_BATCH_UPGRADE_NODES");
+    }
+    const seen = new Set<string>();
+    const inputs: AgentBatchUpgradeInput[] = [];
+    for (const value of raw) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw routeError(400, "批量升级节点参数不合法", "INVALID_BATCH_UPGRADE_NODE");
+      const record = value as Record<string, unknown>;
+      const nodeId = validId(String(record.nodeId ?? ""));
+      if (seen.has(nodeId)) continue;
+      seen.add(nodeId);
+      const params = record.params;
+      if (!params || typeof params !== "object" || Array.isArray(params)) throw routeError(400, "批量升级参数不合法", "INVALID_BATCH_UPGRADE_PARAMS");
+      inputs.push({ nodeId, params: params as Record<string, unknown> });
+    }
+    if (!inputs.length) throw routeError(400, "请选择至少一个不同的 Agent 节点", "INVALID_BATCH_UPGRADE_NODES");
+    try {
+      return reply.code(202).send({ job: options.agentBroker.startBatchUpgrade(inputs) });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "BATCH_UPGRADE_RUNNING") throw routeError(409, "已有 Agent 批量升级任务正在执行，请等待完成", code);
+      throw error;
+    }
+  });
   app.post<{ Params: { nodeId: string } }>("/api/agent/nodes/:nodeId/upgrade", async (request, reply) => {
     const nodeId = validId(request.params.nodeId);
     if (!options.agentBroker.status(nodeId)?.connected) {
       throw routeError(409, "Agent 当前未连接，无法下发升级任务", "AGENT_OFFLINE");
     }
     const body = jsonBody(request);
-    const result = await options.agentBroker.dispatch(nodeId, "agent.self_upgrade", body, 10 * 60 * 1000);
-    return reply.code(result.ok ? 200 : 502).send(result);
+    if (!options.agentBroker.beginSingleUpgrade()) {
+      throw routeError(409, "已有 Agent 升级任务正在执行，请等待完成", "AGENT_UPGRADE_RUNNING");
+    }
+    try {
+      const result = await options.agentBroker.dispatch(nodeId, "agent.self_upgrade", body, 10 * 60 * 1000);
+      return reply.code(result.ok ? 200 : 502).send(result);
+    } finally {
+      options.agentBroker.endSingleUpgrade();
+    }
   });
 
   app.post<{ Params: { nodeId: string } }>("/api/nodes/:nodeId/peers", async (request, reply) => jsonReply(reply, await options.service.createPeer(validId(request.params.nodeId), jsonBody(request))));

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, toRef } from "vue";
 
 import type {
   Inventory,
@@ -15,7 +15,9 @@ import type { ResourceEditKind } from "../shared/events";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { resourceScopeCompactLabel, resourceScopeLabel } from "../shared/resource-scope";
 
-const { kind } = defineProps<{ kind: ResourceEditKind }>();
+const props = defineProps<{ kind: ResourceEditKind; selectedNodeIds?: string[] }>();
+const emit = defineEmits<{ (event: "toggle-node", nodeId: string): void }>();
+const kind = toRef(props, "kind");
 const { dashboard } = useDashboardStore();
 const inventory = computed<Inventory | null>(() => dashboard.value?.inventory ?? null);
 const nodeNames = computed(() => new Map((inventory.value?.nodes ?? []).map((node) => [node.id, node.name])));
@@ -128,7 +130,7 @@ function sourcePolicySources(resource: SourcePolicyEgress): number {
   <template v-if="kind === 'nodes'">
     <tr v-if="!inventory?.nodes.length"><td colspan="5" class="empty-cell">尚无受管节点</td></tr>
     <tr v-for="node in inventory?.nodes ?? []" v-else :key="node.id">
-      <td><strong>{{ node.name }}</strong><small>{{ node.id }}</small></td>
+      <td><label class="resource-node-select"><input type="checkbox" :checked="props.selectedNodeIds?.includes(node.id) ?? false" :disabled="node.transport !== 'agent'" :aria-label="`选择节点 ${node.name} 批量升级 Agent`" :title="node.transport === 'agent' ? '选择此 Agent 节点' : '仅 Agent 节点支持批量升级'" @change="emit('toggle-node', node.id)"><strong>{{ node.name }}</strong></label><small>{{ node.id }}</small></td>
       <td>{{ node.transport === "ssh" ? "SSH" : node.transport === "agent" ? "Agent" : "本机" }} · {{ node.transport === "agent" ? "节点主动连接" : (node.sshUser ? `${node.sshUser}@${node.sshHost}:${node.sshPort}` : (node.sshHost ?? "-")) }}</td>
       <td><code>{{ node.routerId }}</code><small v-if="node.igpAddress">IGP {{ node.igpAddress }}</small></td>
       <td>{{ node.listenPort }}</td>

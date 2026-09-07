@@ -270,6 +270,29 @@ export interface AgentUpgradeResponse {
   result?: { version?: unknown };
 }
 
+export interface AgentBatchUpgradeItem {
+  nodeId: string;
+  status: "pending" | "running" | "success" | "failed" | "skipped";
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  result?: AgentUpgradeResponse;
+}
+
+export interface AgentBatchUpgradeJob {
+  id: string;
+  status: "running" | "completed";
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  currentNodeId: string | null;
+  items: AgentBatchUpgradeItem[];
+}
+
+export interface AgentBatchUpgradeResponse {
+  job: AgentBatchUpgradeJob | null;
+}
+
 export interface NodeTestResponse {
   ok: true;
   node: Pick<ManagedNode, "name" | "sshHost" | "sshPort" | "sshUser">;

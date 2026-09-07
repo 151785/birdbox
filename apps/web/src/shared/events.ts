@@ -53,6 +53,7 @@ declare global {
       button: HTMLButtonElement;
     }>;
     "birdbox:resource-tab-select": CustomEvent<{ target: ResourceWorkspaceTarget }>;
+    "birdbox:agent-batch-upgrade": CustomEvent<{ nodeIds: string[] }>;
     "birdbox:mutation-start": CustomEvent<MutationStartEventDetail>;
     "birdbox:mutation-end": CustomEvent<{ requestId: number }>;
     "birdbox:unknown-mutation-outcome": CustomEvent<{ path: string; method: string }>;

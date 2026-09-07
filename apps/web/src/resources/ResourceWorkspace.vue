@@ -15,6 +15,7 @@ import StaticEditorDialog from "./StaticEditorDialog.vue";
 import RpkiEditorDialog from "./RpkiEditorDialog.vue";
 import SourcePolicyEditorDialog from "./SourcePolicyEditorDialog.vue";
 import SystemProtocolEditorDialog from "./SystemProtocolEditorDialog.vue";
+import BatchAgentUpgradeDialog from "./BatchAgentUpgradeDialog.vue";
 
 interface ResourceTab {
   id: ResourceWorkspaceTarget;
@@ -44,6 +45,29 @@ const activeTab = ref<ResourceWorkspaceTarget>("nodes");
 const active = computed(() => tabs.find((tab) => tab.id === activeTab.value) ?? tabs[0]!);
 const nodesAvailable = computed(() => Boolean(dashboard.value?.inventory.nodes.length));
 const movePending = ref(false);
+const selectedNodeIds = ref<string[]>([]);
+const agentNodeIds = computed(() => (dashboard.value?.inventory.nodes ?? []).filter((node) => node.transport === "agent").map((node) => node.id));
+
+function toggleNode(nodeId: string): void {
+  selectedNodeIds.value = selectedNodeIds.value.includes(nodeId)
+    ? selectedNodeIds.value.filter((id) => id !== nodeId)
+    : [...selectedNodeIds.value, nodeId];
+}
+
+function openBatchUpgrade(): void {
+  const validIds = new Set(agentNodeIds.value);
+  selectedNodeIds.value = selectedNodeIds.value.filter((id) => validIds.has(id));
+  if (!selectedNodeIds.value.length) return;
+  window.dispatchEvent(new CustomEvent("birdbox:agent-batch-upgrade", { detail: { nodeIds: [...selectedNodeIds.value] } }));
+}
+
+function selectAllAgents(): void {
+  selectedNodeIds.value = [...agentNodeIds.value];
+}
+
+function clearSelectedNodes(): void {
+  selectedNodeIds.value = [];
+}
 
 function selectTab(target: ResourceWorkspaceTarget, focus = false): void {
   activeTab.value = target;
@@ -145,8 +169,8 @@ onBeforeUnmount(() => {
     <button v-for="(tab, index) in tabs" :id="tabDomId(tab.id)" :key="tab.id" class="resource-tab" :class="{ active: activeTab === tab.id }" type="button" role="tab" :aria-selected="activeTab === tab.id" :aria-controls="`resource-${tab.id}`" :data-resource-tab="tab.id" :tabindex="activeTab === tab.id ? 0 : -1" @click="selectTab(tab.id)" @keydown="moveTab($event, index)">{{ tab.label }}</button>
   </nav>
   <section :id="`resource-${active.id}`" class="resource-section resource-panel" role="tabpanel">
-    <div class="section-heading compact"><div><p class="eyebrow">{{ active.eyebrow }}</p><h3>{{ active.title }}</h3></div><button class="primary-button compact-command" type="button" :disabled="(active.id === 'peers' || active.id === 'statics' || active.id === 'directs' || active.id === 'kernels' || active.id === 'sourcePolicies') && !nodesAvailable" @click="create(active.id)">+ {{ active.addLabel }}</button></div>
-    <div class="resource-table-wrap"><table :class="active.tableClass"><thead><tr><th v-for="column in active.columns" :key="column">{{ column }}</th></tr></thead><tbody :id="rowsDomId(active.id)"><ResourceTable :kind="active.id" /></tbody></table></div>
+    <div class="section-heading compact"><div><p class="eyebrow">{{ active.eyebrow }}</p><h3>{{ active.title }}</h3></div><div class="resource-heading-actions"><template v-if="active.id === 'nodes'"><button class="compact-command" type="button" :disabled="!agentNodeIds.length" @click="selectAllAgents">全选 Agent</button><button v-if="selectedNodeIds.length" class="compact-command" type="button" @click="clearSelectedNodes">清除选择</button><span v-if="selectedNodeIds.length" class="selection-count">已选 {{ selectedNodeIds.length }} 个</span><button class="secondary-button compact-command" type="button" :disabled="!selectedNodeIds.length" @click="openBatchUpgrade">批量升级 Agent</button></template><button class="primary-button compact-command" type="button" :disabled="(active.id === 'peers' || active.id === 'statics' || active.id === 'directs' || active.id === 'kernels' || active.id === 'sourcePolicies') && !nodesAvailable" @click="create(active.id)">+ {{ active.addLabel }}</button></div></div>
+    <div class="resource-table-wrap"><table :class="active.tableClass"><thead><tr><th v-for="column in active.columns" :key="column">{{ column }}</th></tr></thead><tbody :id="rowsDomId(active.id)"><ResourceTable :kind="active.id" :selected-node-ids="selectedNodeIds" @toggle-node="toggleNode" /></tbody></table></div>
   </section>
   <NodeEditorDialog />
   <PeerEditorDialog />
@@ -155,4 +179,10 @@ onBeforeUnmount(() => {
   <RpkiEditorDialog />
   <SourcePolicyEditorDialog />
   <SystemProtocolEditorDialog />
+  <BatchAgentUpgradeDialog />
 </template>
+
+<style scoped>
+.resource-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.selection-count { color: var(--text-muted, #68707a); font-size: .9rem; white-space: nowrap; }
+</style>

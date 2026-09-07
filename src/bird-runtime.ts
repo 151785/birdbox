@@ -157,8 +157,9 @@ END { exit found ? 0 : 1 }
 
 export const runOnNode = executeNodeCommand;
 
-export async function inspectNode(nodeInput: unknown): Promise<NodeRuntime> {
+export async function inspectNode(nodeInput: unknown, timeoutMs = 20_000): Promise<NodeRuntime> {
   const node = normalizeNode(nodeInput);
+  const boundedTimeout = Math.max(250, Math.min(timeoutMs, 120_000));
   const command = `
 version=$(bird --version 2>&1 || true)
 if [ -S '${node.socketPath}' ]; then
@@ -169,8 +170,8 @@ fi
 printf '%s\\n---BIRDBOX---\\n%s\\n' "$version" "$protocols"
 `.trim();
   const result = node.transport === "agent"
-    ? await executeNodeRpc(node, "bird.inspect", { socketPath: node.socketPath }, 20_000)
-    : await executeNodeCommand(node, command, { timeout: 12_000 });
+    ? await executeNodeRpc(node, "bird.inspect", { socketPath: node.socketPath }, boundedTimeout)
+    : await executeNodeCommand(node, command, { timeout: Math.min(boundedTimeout, 12_000) });
   const [version = "", raw = ""] = result.stdout.split("---BIRDBOX---");
   return {
     nodeId: node.id,
