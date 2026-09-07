@@ -488,6 +488,10 @@ form.validation-attempted .channel-enable-row.field-invalid h3 { color: var(--re
 .segmented-control span { height: 30px; display: grid; place-items: center; color: var(--muted); border-radius: 4px; font-size: 11px; font-weight: 700; }
 .segmented-control input:checked + span { color: var(--ink); background: var(--surface); box-shadow: 0 1px 3px rgba(20, 35, 26, .12); }
 .segmented-control input:focus-visible + span { outline: 2px solid var(--green); outline-offset: 1px; }
+.address-family-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.address-family-options label { min-height: 36px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 650; }
+.address-family-options label:hover { border-color: var(--green); background: var(--surface-hover); }
+.address-family-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--green); }
 .policy-mode-fields { margin-top: 11px; }
 .policy-mode-fields[hidden] { display: none; }
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; color: var(--ink-soft); font-size: 12px; font-weight: 650; }
@@ -710,6 +714,29 @@ dialog.source-policy-editor-dialog { width: min(1120px, calc(100vw - 32px)); }
 .policy-scope-field.field-invalid .policy-scope-selector { border-color: var(--red); box-shadow: var(--error-ring); }
 .policy-scope-field.field-invalid .field-label, .policy-scope-field .field-error { color: var(--red); }
 .policy-scope-field .field-error { margin: 7px 0 0; font-size: 10px; font-weight: 650; }
+.interface-picker { padding: 10px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 6px; }
+.interface-picker-toolbar { display: flex; align-items: center; gap: 9px; }
+.interface-picker-toolbar input { min-width: 0; flex: 1 1 auto; min-height: 32px; padding: 6px 9px; font-size: 11px; }
+.interface-picker-toolbar span { flex: 0 0 auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.interface-option-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 180px; margin-top: 9px; overflow: auto; }
+.interface-option { min-width: 0; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; padding: 7px 8px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.interface-option:hover { border-color: var(--control-hover); background: var(--surface-hover); }
+.interface-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); }
+.interface-option span, .interface-option strong, .interface-option small { min-width: 0; display: block; }
+.interface-option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.interface-option small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.interface-empty { margin: 10px 2px 1px; color: var(--muted); font-size: 10px; }
+.interface-manual-input { width: 100%; margin-top: 8px; box-sizing: border-box; }
+.system-protocol-preview { min-width: 0; margin-top: 3px; padding-top: 14px; border-top: 1px solid var(--line); }
+.system-protocol-preview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.system-protocol-preview-head h3 { margin: 2px 0 0; font-size: 13px; }
+.system-protocol-preview-head small { color: var(--muted); font-size: 10px; }
+.system-protocol-preview pre { max-height: 260px; min-height: 128px; margin: 0; padding: 12px; overflow: auto; color: var(--code-text); background: var(--code); border: 1px solid var(--line); border-radius: 6px; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.kernel-export-policy { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.kernel-export-policy-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.kernel-export-mode { margin-top: 9px; }
+.kernel-prefsrc-field { margin-top: 12px; max-width: 520px; }
+.kernel-prefsrc-field input { width: 100%; }
 dialog.account-settings-dialog { width: min(720px, calc(100vw - 32px)); }
 dialog.route-dialog { width: min(900px, calc(100vw - 32px)); }
 dialog.protocol-details-dialog { width: min(980px, calc(100vw - 32px)); }

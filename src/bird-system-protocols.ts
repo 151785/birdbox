@@ -1,4 +1,6 @@
-import type { DirectProtocol, KernelProtocol } from "../packages/contracts/src/inventory.js";
+import net from "node:net";
+
+import type { AddressFamily, ChannelPolicy, DirectProtocol, KernelExportPolicy, KernelProtocol } from "../packages/contracts/src/inventory.js";
 import {
   assertValidation,
   normalizeEnum,
@@ -22,6 +24,21 @@ function interfaces(value: unknown): string[] {
   assertValidation(result.length <= 64, "Direct 接口列表过多");
   for (const item of result) assertValidation(item.length <= 128 && !/[\u0000-\u001f\u007f;]/.test(item), "Direct 接口匹配规则不合法");
   return [...new Set(result)];
+}
+
+function normalizeKernelExportPolicy(value: unknown, fallback: ChannelPolicy, family: AddressFamily): KernelExportPolicy {
+  if (value === undefined || value === null) return { mode: "visual", policy: fallback, prefSrc: null };
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const mode = input.mode === "krt_prefsrc" || input.mode === "krt-prefsrc" ? "krt_prefsrc" : "visual";
+  if (mode === "krt_prefsrc") {
+    const prefSrc = String(input.prefSrc ?? input.krtPrefSrc ?? "").trim();
+    assertValidation(net.isIP(prefSrc) === (family === "ipv4" ? 4 : 6), `Kernel ${family.toUpperCase()} krt_prefsrc 必须是有效的${family === "ipv4" ? " IPv4" : " IPv6"}地址`);
+    return { mode, policy: fallback, prefSrc };
+  }
+  const policyInput = input.policy && typeof input.policy === "object" && !Array.isArray(input.policy) ? input.policy : value;
+  const policy = normalizeChannelPolicy(policyInput, `Kernel ${family.toUpperCase()} 导出策略`, "export");
+  assertValidation(policy.formAction === "all" || policy.formAction === "none", `Kernel ${family.toUpperCase()} 导出策略只能选择 all 或 none`);
+  return { mode, policy, prefSrc: null };
 }
 
 export function normalizeDirectProtocol(inputValue: unknown): DirectProtocol {
@@ -52,6 +69,13 @@ export function normalizeKernelProtocol(inputValue: unknown): KernelProtocol {
   const exportPolicy = normalizeChannelPolicy(input.exportPolicy, "Kernel 导出策略", "export");
   assertValidation(importPolicy.formAction === "all" || importPolicy.formAction === "none", "Kernel 导入策略只能选择 all 或 none");
   assertValidation(exportPolicy.formAction === "all" || exportPolicy.formAction === "none", "Kernel 导出策略只能选择 all 或 none");
+  const rawExportPolicies = input.exportPolicies && typeof input.exportPolicies === "object" && !Array.isArray(input.exportPolicies)
+    ? input.exportPolicies as Record<string, unknown>
+    : {};
+  const exportPolicies = {
+    ipv4: normalizeKernelExportPolicy(rawExportPolicies.ipv4, exportPolicy, "ipv4"),
+    ipv6: normalizeKernelExportPolicy(rawExportPolicies.ipv6, exportPolicy, "ipv6"),
+  } satisfies Record<AddressFamily, KernelExportPolicy>;
   return {
     id: normalizeId(input.id, "Kernel 资源 ID"),
     label: normalizeLabel(input.label ?? name, "Kernel 显示名称"),
@@ -61,6 +85,7 @@ export function normalizeKernelProtocol(inputValue: unknown): KernelProtocol {
     ipv6,
     importPolicy,
     exportPolicy,
+    exportPolicies,
     table: normalizeOptionalInteger(input.table, "Kernel 路由表", 1, 4294967295),
     scanTime: normalizeOptionalInteger(input.scanTime, "Kernel 扫描周期", 1, 86400),
     persist: input.persist === true,

@@ -14,6 +14,7 @@ import type {
   RpkiSource,
   SourcePolicyEgress,
   DirectProtocol,
+  KernelExportPolicy,
   KernelProtocol,
   StaticRouteFilter,
   StaticRouteFilterOperation,
@@ -150,8 +151,16 @@ function renderNodeProtocols(node: ManagedNode, directResources: DirectProtocol[
       if (kernel.scanTime !== null) output += `  scan time ${kernel.scanTime};\n`;
       if (kernel.persist) output += "  persist;\n";
       const importPolicy = renderPolicy(kernel.importPolicy, "import", null, functionMap, filterMap).replace(/^    /gm, "  ");
-      const exportPolicy = renderPolicy(kernel.exportPolicy, "export", null, functionMap, filterMap).replace(/^    /gm, "  ");
-      output += `  ${family} {\n${importPolicy}${exportPolicy}  };\n`;
+      const kernelExport: KernelExportPolicy = kernel.exportPolicies?.[family as AddressFamily] ?? {
+        mode: "visual",
+        policy: kernel.exportPolicy,
+        prefSrc: null,
+      };
+      const exportPolicy = kernelExport.mode === "krt_prefsrc"
+        ? `    export filter {\n      krt_prefsrc = ${kernelExport.prefSrc};\n      accept;\n    };\n`
+        : renderPolicy(kernelExport.policy, "export", null, functionMap, filterMap);
+      const renderedExportPolicy = exportPolicy.replace(/^    /gm, "  ");
+      output += `  ${family} {\n${importPolicy}${renderedExportPolicy}  };\n`;
       output += "}\n";
     }
   }

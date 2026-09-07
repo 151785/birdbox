@@ -862,6 +862,18 @@ export function createResourceApplicationService(
             : channels.some((channel) => channel.exportDefineId === target.id);
       });
       if (referencedBySession) fail(409, `请先从会话中移除该 ${kind}`);
+      const referencedByKernel = draft.kernelProtocols.some((kernel) => {
+        const exportPolicies = kernel.exportPolicies
+          ? Object.values(kernel.exportPolicies).filter((item) => item.mode === "visual").map((item) => item.policy)
+          : [kernel.exportPolicy];
+        const policies = [kernel.importPolicy, ...exportPolicies];
+        return collection === "filters"
+          ? policies.some((policy) => policy.filterId === target.id)
+          : collection === "functions"
+            ? policies.some((policy) => policy.steps.some((step) => step.type === "function" && step.functionId === target.id))
+            : false;
+      });
+      if (referencedByKernel) fail(409, `请先从 Kernel 资源中移除该 ${kind}`);
       const referencedByOspf = draft.ospfDomains.some((domain) => domain.nodeConfigs.some((config) =>
         Object.values(config.importPolicies).concat(Object.values(config.exportPolicies)).some((policy) =>
           collection === "filters" ? policy.filterId === target.id : collection === "functions" ? policy.steps.some((step) => step.type === "function" && step.functionId === target.id) : Object.values(config.exportDefineIds).includes(target.id),

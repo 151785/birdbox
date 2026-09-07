@@ -23,8 +23,10 @@ const props = withDefaults(defineProps<{
   defines: PolicyDefine[];
   disabled: boolean;
   showPolicyAction?: boolean;
+  allowExportCidr?: boolean;
 }>(), {
   showPolicyAction: true,
+  allowExportCidr: true,
 });
 
 const emit = defineEmits<{
@@ -173,7 +175,7 @@ function openResource(target: ResourceWorkspaceTarget): void {
         <div class="field"><label>可视化策略动作</label>
           <select :value="policy.formAction" :disabled="disabled" @change="setFormAction(($event.currentTarget as HTMLSelectElement).value)">
             <template v-if="direction === 'import'"><option value="all">导入所有</option><option value="none">不导入</option></template>
-            <template v-else><option value="none">不导出</option><option value="all">导出所有</option><option value="cidr">导出指定 CIDR Define</option></template>
+            <template v-else><option value="none">不导出</option><option value="all">导出所有</option><option v-if="allowExportCidr" value="cidr">导出指定 CIDR Define</option></template>
           </select>
         </div>
       </div>

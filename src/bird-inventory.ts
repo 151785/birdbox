@@ -138,7 +138,8 @@ export function validateInventory(inputValue: unknown, options: InventoryValidat
   const filterMap = new Map(filters.map((item) => [item.id, item]));
   for (const resource of normalizedKernelProtocols) {
     const targetNodeIds = resource.nodeIds ?? nodes.map((node) => node.id);
-    for (const policy of [resource.importPolicy, resource.exportPolicy]) {
+    const exportPolicies = Object.values(resource.exportPolicies ?? {}).filter((item) => item.mode === "visual").map((item) => item.policy);
+    for (const policy of [resource.importPolicy, ...exportPolicies]) {
       for (const step of policy.steps.filter((item) => item.type === "function")) {
         const fn = functionMap.get(step.functionId);
         assertValidation(fn && fn.enabled && fn.callable && targetNodeIds.every((nodeId) => resourceAppliesToNode(fn, nodeId)), `Kernel 资源 ${resource.name} 引用了不可用的 Function`);

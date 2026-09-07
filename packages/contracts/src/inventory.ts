@@ -168,11 +168,20 @@ export interface KernelProtocol {
   ipv4: boolean;
   ipv6: boolean;
   importPolicy: ChannelPolicy;
+  /** Legacy shared export policy; retained for backwards-compatible clients. */
   exportPolicy: ChannelPolicy;
+  /** Per-address-family Kernel export behavior. */
+  exportPolicies?: Record<AddressFamily, KernelExportPolicy>;
   table: number | null;
   scanTime: number | null;
   persist: boolean;
   enabled: boolean;
+}
+
+export interface KernelExportPolicy {
+  mode: "visual" | "krt_prefsrc";
+  policy: ChannelPolicy;
+  prefSrc: string | null;
 }
 
 export interface SourcePolicyEgressGroup {

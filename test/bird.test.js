@@ -569,6 +569,8 @@ test("uses explicit Direct and Kernel resources, including an intentional empty 
   const normalized = normalizeNode({ id: "router", name: "Router", transport: "local", routerId: "192.0.2.1" });
   const direct = normalizeDirectProtocol({ id: "direct_eth", label: "Ethernet", name: "direct_eth", nodeId: normalized.id, interfaces: ["eth0"], ipv4: true, ipv6: false });
   const kernel = normalizeKernelProtocol({ id: "kernel_main", label: "Main FIB", name: "kernel_main", nodeIds: [normalized.id], ipv4: true, ipv6: true, importPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" }, exportPolicy: { mode: "form", steps: [], filterId: null, formAction: "all" } });
+  assert.equal(kernel.exportPolicies?.ipv4.mode, "visual");
+  assert.equal(kernel.exportPolicies?.ipv6.policy.formAction, "all");
   const config = renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [direct,], [kernel]);
   assert.match(config, /protocol direct direct_eth/);
   assert.match(config, /protocol kernel kernel_main4/);
@@ -576,6 +578,53 @@ test("uses explicit Direct and Kernel resources, including an intentional empty 
   const empty = renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [], []);
   assert.doesNotMatch(empty, /protocol direct birdbox_direct/);
   assert.doesNotMatch(empty, /protocol kernel birdbox_kernel/);
+});
+
+test("renders Kernel export policy independently for IPv4 and IPv6", () => {
+  const normalized = normalizeNode({ id: "router", name: "Router", transport: "local", routerId: "192.0.2.1" });
+  const kernel = normalizeKernelProtocol({
+    id: "kernel_split",
+    label: "Split export",
+    name: "kernel_split",
+    nodeIds: [normalized.id],
+    ipv4: true,
+    ipv6: true,
+    importPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" },
+    exportPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" },
+    exportPolicies: {
+      ipv4: { mode: "krt_prefsrc", prefSrc: "192.0.2.1" },
+      ipv6: { mode: "visual", policy: { mode: "form", steps: [], filterId: null, formAction: "all" } },
+    },
+  });
+  const config = renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [], [kernel]);
+  assert.match(config, /ipv4 \{[\s\S]*krt_prefsrc = 192\.0\.2\.1;[\s\S]*accept;/);
+  assert.match(config, /ipv6 \{[\s\S]*export all;/);
+  assert.equal(kernel.exportPolicies?.ipv4.mode, "krt_prefsrc");
+  assert.doesNotThrow(() => renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [], [kernel]));
+  const visualMissingFilter = normalizeKernelProtocol({
+    id: "kernel_visual_missing_filter",
+    label: "Missing filter",
+    name: "kernel_visual_missing_filter",
+    nodeIds: [normalized.id],
+    ipv4: true,
+    ipv6: false,
+    exportPolicies: {
+      ipv4: { mode: "visual", policy: { mode: "custom", steps: [], filterId: "filter_missing", formAction: "none" } },
+    },
+  });
+  assert.throws(() => renderBirdConfig(normalized, [], [], [], [], [], [], [], [], [], [], [visualMissingFilter]), /不可用的 Filter/);
+  assert.throws(
+    () => normalizeKernelProtocol({
+      id: "kernel_bad",
+      label: "Bad family",
+      name: "kernel_bad",
+      nodeIds: [normalized.id],
+      ipv4: true,
+      ipv6: false,
+      exportPolicies: { ipv4: { mode: "krt_prefsrc", prefSrc: "2001:db8::1" } },
+    }),
+    /必须是有效的 IPv4地址/,
+  );
 });
 
 test("renders per-CIDR Static actions and follows Define entry changes", () => {
@@ -1132,6 +1181,38 @@ test("native BIRD 2 parses IPv4-over-IPv6 ENH and IPv6-over-IPv4 without ENH", a
   const config = renderBirdConfig(node, [peerV6, peerV4], crossFamilySessions);
   assert.match(config, /protocol bgp native_v4_via_v6[\s\S]*?extended next hop on;/);
   assert.doesNotMatch(config.match(/protocol bgp native_v6_via_v4[\s\S]*?\n\}/)?.[0] ?? "", /extended next hop on;/);
+  await fs.writeFile(configPath, config);
+  await execFileAsync(binary, ["-p", "-c", configPath]);
+});
+
+test("native BIRD 2 parses per-family Kernel export modes", async (context) => {
+  let binary = null;
+  for (const candidate of ["/usr/sbin/bird", "/usr/bin/bird"]) {
+    try { await fs.access(candidate); binary = candidate; break; } catch {}
+  }
+  if (!binary) return context.skip("BIRD binary is unavailable");
+  const { stdout, stderr } = await execFileAsync(binary, ["--version"]);
+  if (!/^BIRD version 2\./.test(`${stdout}${stderr}`)) return context.skip("BIRD 2 is unavailable");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "birdbox-native-kernel-export-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const configPath = path.join(root, "bird.conf");
+  const kernel = normalizeKernelProtocol({
+    id: "kernel_native_export",
+    label: "Native Kernel export",
+    name: "kernel_native_export",
+    nodeIds: [node.id],
+    ipv4: true,
+    ipv6: true,
+    importPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" },
+    exportPolicy: { mode: "form", steps: [], filterId: null, formAction: "none" },
+    exportPolicies: {
+      ipv4: { mode: "krt_prefsrc", prefSrc: "192.0.2.1" },
+      ipv6: { mode: "krt_prefsrc", prefSrc: "2001:db8::1" },
+    },
+  });
+  const config = renderBirdConfig(node, [], [], [], [], [], [], [], [], [], [], [kernel]);
+  assert.match(config, /krt_prefsrc = 192\.0\.2\.1;/);
+  assert.match(config, /krt_prefsrc = 2001:db8::1;/);
   await fs.writeFile(configPath, config);
   await execFileAsync(binary, ["-p", "-c", configPath]);
 });

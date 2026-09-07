@@ -50,12 +50,35 @@ function resourceSource(resource: PolicyDefine | PolicyFunction | PolicyFilter):
 }
 
 function policyReferenceCount(collection: "functions" | "filters", resourceId: string): number {
-  return (inventory.value?.sessions ?? []).reduce((count, session) => {
+  if (!inventory.value) return 0;
+  const sessionCount = (inventory.value.sessions ?? []).reduce((count, session) => {
     const policies = Object.values(session.channels).flatMap((channel) => [channel.importPolicy, channel.exportPolicy]);
     return count + policies.filter((policy) => collection === "functions"
       ? policy.steps.some((step) => step.type === "function" && step.functionId === resourceId)
       : policy.filterId === resourceId).length;
   }, 0);
+  const kernelCount = (inventory.value.kernelProtocols ?? []).reduce((count, resource) => {
+    const exportPolicies = resource.exportPolicies
+      ? Object.values(resource.exportPolicies).filter((item) => item.mode === "visual").map((item) => item.policy)
+      : [resource.exportPolicy];
+    const policies = [resource.importPolicy, ...exportPolicies];
+    return count + policies.filter((policy) => collection === "functions"
+      ? policy.steps.some((step) => step.type === "function" && step.functionId === resourceId)
+      : policy.filterId === resourceId).length;
+  }, 0);
+  return sessionCount + kernelCount;
+}
+
+function kernelExportSummary(resource: Inventory["kernelProtocols"][number]): string {
+  if (!resource.exportPolicies) return resource.exportPolicy.formAction;
+  return (["ipv4", "ipv6"] as const)
+    .filter((family) => resource[family])
+    .map((family) => {
+      const setting = resource.exportPolicies?.[family];
+      if (!setting || setting.mode === "visual") return `${family === "ipv4" ? "v4" : "v6"}: 可视化`;
+      return `${family === "ipv4" ? "v4" : "v6"}: krt_prefsrc ${setting.prefSrc ?? "未设置"}`;
+    })
+    .join(" / ");
 }
 
 function defineReferenceCount(resource: PolicyDefine): number {
@@ -173,7 +196,7 @@ function sourcePolicySources(resource: SourcePolicyEgress): number {
       <td><strong>{{ resource.label }}</strong><small>{{ resource.name }} · {{ resource.id }}</small></td>
       <td :title="resourceScopeLabel(resource, nodeNames)">{{ resourceScopeCompactLabel(resource, nodeNames) }}</td>
       <td>{{ [resource.ipv4 ? 'IPv4' : '', resource.ipv6 ? 'IPv6' : ''].filter(Boolean).join(' / ') }}</td>
-      <td><code>{{ resource.importPolicy.formAction }} / {{ resource.exportPolicy.formAction }}</code></td>
+      <td><code>{{ resource.importPolicy.formAction }} / {{ kernelExportSummary(resource) }}</code></td>
       <td><span class="resource-state" :class="resource.enabled ? 'enabled' : 'disabled'">{{ resource.enabled ? '已启用' : '已停用' }}</span></td>
       <td><button class="row-edit-button" type="button" title="编辑 Kernel" :aria-label="`编辑 Kernel ${resource.name}`" @click="edit('kernels', resource.id)">✎</button></td>
     </tr>
