@@ -320,6 +320,18 @@ form.validation-attempted .channel-enable-row.field-invalid h3 { color: var(--re
 .resource-table-wrap td strong { font-size: 12px; }
 .resource-table-wrap td small { margin-top: 3px; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .resource-table-wrap code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.resource-node-select {
+  min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px;
+  cursor: pointer;
+}
+.resource-node-select input {
+  width: 16px; height: 16px; min-height: 16px; margin: 0; padding: 0;
+  accent-color: var(--green); box-shadow: none; cursor: pointer;
+}
+.resource-node-select input:hover { border-color: transparent; box-shadow: none; }
+.resource-node-select input:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.resource-node-select input:disabled { cursor: not-allowed; }
+.resource-node-select strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-summary { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .resource-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--neutral); }
