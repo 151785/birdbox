@@ -120,7 +120,7 @@ const bfd = ref(false);
 const gracefulRestart = ref(false);
 const redistributeStatic = ref(false);
 const showAdvanced = ref(false);
-const protocolOptions = ref<OspfProtocolOptions>({
+const defaultProtocolOptions = (): OspfProtocolOptions => ({
   rfc1583compat: false,
   rfc5838: true,
   instanceId: null,
@@ -132,6 +132,7 @@ const protocolOptions = ref<OspfProtocolOptions>({
   gracefulRestartMode: "aware",
   gracefulRestartTime: null,
 });
+const protocolOptions = ref<OspfProtocolOptions>(defaultProtocolOptions());
 const areaOptions = ref<Record<string, OspfAreaOptions>>({});
 const virtualLinks = ref<OspfVirtualLink[]>([]);
 const configuredAreas = computed(() => [...new Set([...links.value.map((link) => link.area), ...Object.keys(areaOptions.value)])].sort());
@@ -179,17 +180,6 @@ function setNeighborText(link: OspfLink, value: string): void {
   link.options.neighbors = value.split(",").map((item) => item.trim()).filter(Boolean).map((item) => ({ address: item.replace(/\s+eligible$/i, "").trim(), eligible: /\s+eligible$/i.test(item) }));
 }
 const search = ref("");
-// The node API intentionally does not expose every OS interface. Keep a small
-// editable catalogue for the prototype and retain the current value when a
-// saved link uses an interface that is not in the catalogue.
-const knownInterfaces = [
-  "lo",
-  "eth0",
-  "wg-hytronhk",
-  "bb02-03",
-  "bb02-04",
-  "bb03-04",
-];
 const links = ref<OspfLink[]>([]);
 const selectedLinkId = ref<string | null>(null);
 const showAddLink = ref(false);
@@ -475,15 +465,12 @@ const availableFilters = computed(
 );
 function interfacesForNode(nodeId: string, current = ""): string[] {
   const discovered = interfaceOptionsByNode.value[nodeId] ?? [];
-  const values = [...new Set([...discovered, ...knownInterfaces])];
+  // Interface names are node-scoped. Never mix the catalogue of another
+  // managed node into this list; doing so can create a link that references
+  // an interface which only exists on the opposite endpoint.
+  const values = [...new Set(discovered)];
   return current && !values.includes(current) ? [current, ...values] : values;
 }
-const allInterfaces = computed(() => [
-  ...new Set([
-    ...knownInterfaces,
-    ...Object.values(interfaceOptionsByNode.value).flat(),
-  ]),
-]);
 const selectedNodeLinks = computed(() =>
   topologyLinks.value.filter(
     (link) =>
@@ -796,9 +783,21 @@ function loadNodeConfig(nodeId: string): void {
     bfd.value = false;
     gracefulRestart.value = false;
     redistributeStatic.value = false;
-    protocolOptions.value = { rfc1583compat: false, rfc5838: true, instanceId: null, stubRouter: false, tick: null, ecmp: null, ecmpLimit: null, mergeExternal: false, gracefulRestartMode: "aware", gracefulRestartTime: null };
+    protocolOptions.value = defaultProtocolOptions();
     areaOptions.value = {};
     virtualLinks.value = [];
+    // A node without a saved config must start from its own independent
+    // policy draft. Otherwise switching from a configured node leaks that
+    // node's import/export policy into the new node's editor.
+    ospfImportPolicies.value = {
+      ospfv2: defaultImportPolicy(),
+      ospfv3: defaultImportPolicy(),
+    };
+    ospfExportPolicies.value = {
+      ospfv2: defaultExportPolicy(),
+      ospfv3: defaultExportPolicy(),
+    };
+    ospfExportDefineIds.value = { ospfv2: null, ospfv3: null };
     return;
   }
   enabled.value = config.enabled;
@@ -807,7 +806,9 @@ function loadNodeConfig(nodeId: string): void {
   bfd.value = config.bfd === true;
   gracefulRestart.value = config.gracefulRestart === true;
   redistributeStatic.value = config.redistributeStatic === true;
-  protocolOptions.value = { ...protocolOptions.value, ...(config.protocolOptions ?? {}) };
+  // Do not merge into the previous node's draft. Empty or legacy protocol
+  // options must still reset to defaults before applying this node's values.
+  protocolOptions.value = { ...defaultProtocolOptions(), ...(config.protocolOptions ?? {}) };
   areaOptions.value = JSON.parse(JSON.stringify(config.areaOptions ?? {})) as Record<string, OspfAreaOptions>;
   virtualLinks.value = JSON.parse(JSON.stringify(config.virtualLinks ?? [])) as OspfVirtualLink[];
   ospfImportPolicies.value = {
@@ -1034,6 +1035,9 @@ function closeAddLink(): void {
   linkDraftError.value = "";
 }
 function addLink(): void {
+  // Preserve edits in the currently selected node before the link operation
+  // updates either endpoint's saved config.
+  if (selectedNodeId.value) saveSelectedNodeConfig();
   const from = linkDraftFrom.value;
   const to = linkDraftTo.value;
   const localInterface = linkDraftLocalInterface.value;
@@ -1072,6 +1076,35 @@ function addLink(): void {
     auth: "none",
     options: { type: sharedInterface ? "nbma" : "ptp", deadMode: "count", checkLink: true, ttlSecurity: "off", neighbors: [], passwordOptions: {} },
   });
+  // A link is an explicit request to run OSPF on both endpoints. Persist an
+  // enabled config for each side immediately, while retaining all existing
+  // per-node policies and protocol settings.
+  for (const nodeId of [from, to]) {
+    const existing = nodeConfigs.value[nodeId];
+    if (existing) {
+      nodeConfigs.value[nodeId] = { ...existing, enabled: true };
+      continue;
+    }
+    const node = nodes.value.find((item) => item.id === nodeId);
+    nodeConfigs.value[nodeId] = {
+      nodeId,
+      enabled: true,
+      versions: ["ospfv2"],
+      routerId: node?.routerId || null,
+      importPolicies: { ospfv2: defaultImportPolicy(), ospfv3: defaultImportPolicy() },
+      exportPolicies: { ospfv2: defaultExportPolicy(), ospfv3: defaultExportPolicy() },
+      exportDefineIds: { ospfv2: null, ospfv3: null },
+      bfd: false,
+      gracefulRestart: false,
+      redistributeStatic: false,
+      protocolOptions: {},
+      areaOptions: {},
+      virtualLinks: [],
+    };
+  }
+  if (selectedNodeId.value === from || selectedNodeId.value === to) {
+    loadNodeConfig(selectedNodeId.value);
+  }
   if (sharedInterface) {
     for (const existing of links.value) {
       if (
@@ -1523,8 +1556,8 @@ onBeforeUnmount(() => {
             <label>本端接口</label
             ><input
               v-model.trim="linkDraftLocalInterface"
-              list="ospf-interface-names"
-              placeholder="例如 bb02-03"
+              list="ospf-draft-local-interfaces"
+              :placeholder="linkDraftLocalOptions.length ? `选择 ${nodes.find((node) => node.id === linkDraftFrom)?.name ?? '本端'} 接口` : '手动填写接口名'"
             />
           </div>
           <div class="field">
@@ -1539,8 +1572,8 @@ onBeforeUnmount(() => {
             <label>对端接口</label
             ><input
               v-model.trim="linkDraftRemoteInterface"
-              list="ospf-interface-names"
-              placeholder="例如 bb02-03"
+              list="ospf-draft-remote-interfaces"
+              :placeholder="linkDraftRemoteOptions.length ? `选择 ${nodes.find((node) => node.id === linkDraftTo)?.name ?? '对端'} 接口` : '手动填写接口名'"
             />
           </div>
           <div class="field">
@@ -1548,8 +1581,11 @@ onBeforeUnmount(() => {
             ><input v-model="linkDraftArea" placeholder="0.0.0.0" />
           </div>
         </div>
-        <datalist id="ospf-interface-names">
-          <option v-for="item in allInterfaces" :key="item" :value="item" />
+        <datalist id="ospf-draft-local-interfaces">
+          <option v-for="item in linkDraftLocalOptions" :key="`draft-local-${item}`" :value="item" />
+        </datalist>
+        <datalist id="ospf-draft-remote-interfaces">
+          <option v-for="item in linkDraftRemoteOptions" :key="`draft-remote-${item}`" :value="item" />
         </datalist>
         <p v-if="linkDraftError" class="ospf-form-error" role="alert">
           {{ linkDraftError }}
@@ -1821,6 +1857,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="ospf-policy-grid">
             <PolicyEditor
+              :key="`${selectedNodeId}-${ospfVersion}-import`"
               :family="ospfVersion === 'ospfv2' ? 'ipv4' : 'ipv6'"
               direction="import"
               :policy="ospfImportPolicies[ospfVersion]"
@@ -1832,6 +1869,7 @@ onBeforeUnmount(() => {
               :show-policy-action="false"
               @update:policy="updateImportPolicy(ospfVersion, $event)"
             /><PolicyEditor
+              :key="`${selectedNodeId}-${ospfVersion}-export`"
               :family="ospfVersion === 'ospfv2' ? 'ipv4' : 'ipv6'"
               direction="export"
               :policy="ospfExportPolicies[ospfVersion]"
