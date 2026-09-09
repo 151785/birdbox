@@ -533,11 +533,12 @@ watch(() => nodes.value.map((node) => node.id).join(","), () => {
   ensureNodePositions(nextNodes);
 });
 watch(
-  [selectedNodeId, () => nodeConfigs.value[selectedNodeId.value]],
-  ([nodeId, config]) => {
-    // Always hydrate the editor when the selection changes. Without a saved
-    // config, this also replaces stale prototype defaults with the node's
-    // actual Router ID and disables the unsaved node until explicitly enabled.
+  selectedNodeId,
+  (nodeId) => {
+    // Hydrate only when the selected node changes. Watching the config object
+    // as well causes a policy edit/save to immediately re-hydrate the form
+    // from a reactive snapshot and can make actions appear to leak between
+    // nodes. Explicit loads are used after the domain itself is fetched.
     if (nodeId) loadNodeConfig(nodeId);
   },
 );
@@ -584,6 +585,9 @@ function interfaceInUse(
   interfaceName: string,
   linkId: string,
 ): boolean {
+  // Reusing an interface is valid for NBMA/PtMP links and is normalized by
+  // the backend. Do not disable it in the editor; endpoint-scoped catalogues
+  // already prevent selecting an interface from the opposite node.
   return false;
 }
 function policyText(
@@ -635,9 +639,14 @@ function policyText(
 }
 function updateImportPolicy(version: OspfVersion, policy: ChannelPolicy): void {
   ospfImportPolicies.value = { ...ospfImportPolicies.value, [version]: policy };
+  // Persist the active editor draft immediately. This keeps each node's
+  // policy isolated even when another reactive update (link/runtime refresh)
+  // happens before the user switches nodes.
+  saveSelectedNodeConfig();
 }
 function updateExportPolicy(version: OspfVersion, policy: ChannelPolicy): void {
   ospfExportPolicies.value = { ...ospfExportPolicies.value, [version]: policy };
+  saveSelectedNodeConfig();
 }
 function updateExportDefine(
   version: OspfVersion,
@@ -647,11 +656,13 @@ function updateExportDefine(
     ...ospfExportDefineIds.value,
     [version]: defineId,
   };
+  saveSelectedNodeConfig();
 }
 function copyPolicy(policy: ChannelPolicy): ChannelPolicy {
   return { ...policy, steps: policy.steps.map((step) => ({ ...step })) };
 }
 function saveSelectedNodeConfig(): void {
+  if (!selectedNodeId.value) return;
   nodeConfigs.value = {
     ...nodeConfigs.value,
     [selectedNodeId.value]: {
@@ -679,11 +690,19 @@ function saveSelectedNodeConfig(): void {
 }
 function domainPayload(): Record<string, unknown> {
   saveSelectedNodeConfig();
+  // A link is an explicit request to run OSPF on both endpoints. Keep this
+  // invariant at payload construction as well, so a stale/legacy draft cannot
+  // disable one side after the link has been created.
+  const linkedNodeIds = new Set(links.value.flatMap((link) => [link.from, link.to]));
   const configs = nodes.value.map(
-    (node) =>
-      nodeConfigs.value[node.id] ?? {
+    (node) => {
+      const existing = nodeConfigs.value[node.id];
+      if (existing) return linkedNodeIds.has(node.id) && !existing.enabled
+        ? { ...existing, enabled: true }
+        : existing;
+      return {
         nodeId: node.id,
-        enabled: false,
+        enabled: linkedNodeIds.has(node.id),
         versions: ["ospfv2"],
         routerId: node.routerId || null,
         importPolicies: {
@@ -701,7 +720,8 @@ function domainPayload(): Record<string, unknown> {
         protocolOptions: {},
         areaOptions: {},
         virtualLinks: [],
-      },
+      };
+    },
   );
   return {
     id: ospfDomainId.value ?? undefined,
@@ -1021,6 +1041,20 @@ function resetLinkDraft(): void {
   linkDraftError.value = "";
   linkDraftLocalInterface.value = "";
   linkDraftRemoteInterface.value = "";
+}
+function handleDraftFromChange(): void {
+  linkDraftLocalInterface.value = "";
+  linkDraftRemoteInterface.value = "";
+  if (linkDraftFrom.value === linkDraftTo.value) {
+    linkDraftTo.value = nodes.value.find((node) => node.id !== linkDraftFrom.value)?.id ?? "";
+  }
+}
+function handleDraftToChange(): void {
+  linkDraftLocalInterface.value = "";
+  linkDraftRemoteInterface.value = "";
+  if (linkDraftTo.value === linkDraftFrom.value) {
+    linkDraftFrom.value = nodes.value.find((node) => node.id !== linkDraftTo.value)?.id ?? "";
+  }
 }
 function openAddLink(): void {
   const first = nodes.value[0]?.id ?? "";
@@ -1546,7 +1580,7 @@ onBeforeUnmount(() => {
         <div class="ospf-add-link-grid">
           <div class="field">
             <label>本端节点</label
-            ><select v-model="linkDraftFrom" @change="resetLinkDraft">
+            ><select v-model="linkDraftFrom" @change="handleDraftFromChange">
               <option v-for="node in nodes" :key="node.id" :value="node.id">
                 {{ node.name }}
               </option>
@@ -1554,15 +1588,18 @@ onBeforeUnmount(() => {
           </div>
           <div class="field">
             <label>本端接口</label
-            ><input
+            ><select v-if="linkDraftLocalOptions.length" v-model="linkDraftLocalInterface">
+              <option value="">请选择 {{ nodes.find((node) => node.id === linkDraftFrom)?.name ?? "本端" }} 接口</option>
+              <option v-for="item in linkDraftLocalOptions" :key="`draft-local-${item}`" :value="item">{{ item }}</option>
+            </select><input
+              v-else
               v-model.trim="linkDraftLocalInterface"
-              list="ospf-draft-local-interfaces"
-              :placeholder="linkDraftLocalOptions.length ? `选择 ${nodes.find((node) => node.id === linkDraftFrom)?.name ?? '本端'} 接口` : '手动填写接口名'"
+              :placeholder="`手动填写 ${nodes.find((node) => node.id === linkDraftFrom)?.name ?? '本端'} 接口名`"
             />
           </div>
           <div class="field">
             <label>对端节点</label
-            ><select v-model="linkDraftTo" @change="resetLinkDraft">
+            ><select v-model="linkDraftTo" @change="handleDraftToChange">
               <option v-for="node in nodes" :key="node.id" :value="node.id">
                 {{ node.name }}
               </option>
@@ -1570,10 +1607,13 @@ onBeforeUnmount(() => {
           </div>
           <div class="field">
             <label>对端接口</label
-            ><input
+            ><select v-if="linkDraftRemoteOptions.length" v-model="linkDraftRemoteInterface">
+              <option value="">请选择 {{ nodes.find((node) => node.id === linkDraftTo)?.name ?? "对端" }} 接口</option>
+              <option v-for="item in linkDraftRemoteOptions" :key="`draft-remote-${item}`" :value="item">{{ item }}</option>
+            </select><input
+              v-else
               v-model.trim="linkDraftRemoteInterface"
-              list="ospf-draft-remote-interfaces"
-              :placeholder="linkDraftRemoteOptions.length ? `选择 ${nodes.find((node) => node.id === linkDraftTo)?.name ?? '对端'} 接口` : '手动填写接口名'"
+              :placeholder="`手动填写 ${nodes.find((node) => node.id === linkDraftTo)?.name ?? '对端'} 接口名`"
             />
           </div>
           <div class="field">
@@ -1581,12 +1621,6 @@ onBeforeUnmount(() => {
             ><input v-model="linkDraftArea" placeholder="0.0.0.0" />
           </div>
         </div>
-        <datalist id="ospf-draft-local-interfaces">
-          <option v-for="item in linkDraftLocalOptions" :key="`draft-local-${item}`" :value="item" />
-        </datalist>
-        <datalist id="ospf-draft-remote-interfaces">
-          <option v-for="item in linkDraftRemoteOptions" :key="`draft-remote-${item}`" :value="item" />
-        </datalist>
         <p v-if="linkDraftError" class="ospf-form-error" role="alert">
           {{ linkDraftError }}
         </p>

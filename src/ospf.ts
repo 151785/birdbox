@@ -205,7 +205,16 @@ export function normalizeOspfDomain(inputValue: unknown): OspfDomain {
       );
     }
   }
-  return { id: normalizeId(input.id, "OSPF 域 ID"), name: normalizeLabel(input.name, "OSPF 域名称"), nodeConfigs, links, layout };
+  // Any configured link is an explicit request to run OSPF on both endpoints.
+  // Enforce this invariant server-side as well as in the UI so legacy clients
+  // cannot persist a link with a disabled endpoint.
+  const linkedNodeIds = new Set(links.flatMap((link) => [link.fromNodeId, link.toNodeId]));
+  const enabledNodeConfigs = nodeConfigs.map((config) =>
+    linkedNodeIds.has(config.nodeId) && !config.enabled
+      ? { ...config, enabled: true }
+      : config,
+  );
+  return { id: normalizeId(input.id, "OSPF 域 ID"), name: normalizeLabel(input.name, "OSPF 域名称"), nodeConfigs: enabledNodeConfigs, links, layout };
 }
 
 export function ospfDomainNodeIds(domain: OspfDomain): string[] {

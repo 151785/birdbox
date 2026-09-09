@@ -78,6 +78,13 @@ test("normalizes OSPF domain and renders both protocol versions", async () => {
   await execFileAsync("bird", ["-p", "-c", file]);
 });
 
+test("automatically enables both OSPF endpoints when a link exists", () => {
+  const input = domain();
+  input.nodeConfigs = input.nodeConfigs.map((config) => ({ ...config, enabled: false }));
+  const normalized = normalizeOspfDomain(input);
+  assert.deepEqual(normalized.nodeConfigs.map((config) => config.enabled), [true, true]);
+});
+
 test("defaults OSPF link authentication to none without rendering an auth directive", () => {
   const input = domain();
   delete input.links[0].authentication;
